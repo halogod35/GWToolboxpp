@@ -132,7 +132,7 @@ namespace {
             case GW::RegionType::ZaishenBattle:
             case GW::RegionType::HeroesAscent:
             case GW::RegionType::HeroBattleArea:
-                return false;
+                return true;
             default:
                 return true;
         }
@@ -202,7 +202,7 @@ namespace {
             case GW::RegionType::HeroBattleArea:
             case GW::RegionType::HeroesAscent:
             case GW::RegionType::ZaishenBattle:
-                return true;
+                return false;
             default:
                 return false;
         }
