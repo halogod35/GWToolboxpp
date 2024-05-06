@@ -257,8 +257,7 @@ namespace {
     }
 
     bool ShouldDisableToolbox() {
-        const auto m = GW::Map::GetMapInfo();
-        return m && m->GetIsPvP();
+        return false;
     }
 
     bool CanRenderToolbox() {
