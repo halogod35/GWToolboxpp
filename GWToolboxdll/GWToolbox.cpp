@@ -362,7 +362,7 @@ void UpdateEnabledWidgetVectors(ToolboxModule* m, bool added)
     }
 }
 
-bool GWToolbox::ShouldDisableToolbox(GW::Constants::MapID map_id)
+bool GWToolbox::ShouldDisableToolbox(GW::Constants::MapID)
 {
     return false;
 }
