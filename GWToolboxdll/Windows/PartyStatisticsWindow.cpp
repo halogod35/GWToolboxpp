@@ -297,7 +297,7 @@ namespace {
             return false;
         }
 
-        const uint32_t my_player_id = GW::Agents::GetPlayerId();
+        const uint32_t my_player_id = GW::Agents::GetControlledCharacterId();
         const GW::Skillbar* my_skillbar = GetAgentSkillbar(my_player_id);
         if (!my_skillbar) {
             return false;
@@ -424,7 +424,7 @@ namespace {
         }
     }
 
-    void CmdSkillStatistics(const wchar_t*, const int argc, const LPWSTR* argv)
+    void CHAT_CMD_FUNC(CmdSkillStatistics)
     {
         /* command: /skillstats */
         /* will write the stats of the self player */
@@ -593,7 +593,7 @@ void PartyStatisticsWindow::Update(const float)
         if (GW::Constants::InstanceType::Loading == GW::Map::GetInstanceType()) {
             return;
         }
-        if (!GW::Agents::GetPlayer()) {
+        if (!GW::Agents::GetControlledCharacter()) {
             return;
         }
 

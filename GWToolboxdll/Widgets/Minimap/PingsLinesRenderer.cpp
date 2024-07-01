@@ -15,6 +15,7 @@
 #include <Defines.h>
 #include <Utils/GuiUtils.h>
 #include <Widgets/Minimap/Minimap.h>
+#include <GWCA/Managers/PlayerMgr.h>
 
 void PingsLinesRenderer::LoadSettings(const ToolboxIni* ini, const char* section)
 {
@@ -109,10 +110,12 @@ void PingsLinesRenderer::OnUIMessage(GW::HookStatus*, GW::UI::UIMessage message_
 
     bool new_session;
 
+    if (packet->player_number == GW::PlayerMgr::GetPlayerNumber()) {
+        return;
+    }
     if (drawings[packet->player_number].player == packet->player_number) {
-        return; // Don't need to draw our own compass markings
-        //new_session = drawings[packet->player_number].session != packet->session_id;
-        //drawings[packet->player_number].session = packet->session_id;
+        new_session = drawings[packet->player_number].session != packet->session_id;
+        drawings[packet->player_number].session = packet->session_id;
     }
     else {
         drawings[packet->player_number].player = packet->player_number;
@@ -162,7 +165,7 @@ void PingsLinesRenderer::OnUIMessage(GW::HookStatus*, GW::UI::UIMessage message_
 void PingsLinesRenderer::P153Callback(const GW::Packet::StoC::GenericValueTarget* pak)
 {
     if (pak->Value_id == 20
-        && pak->caster == GW::Agents::GetPlayerId()
+        && pak->caster == GW::Agents::GetControlledCharacterId()
         && pak->value == 928) {
         recall_target = pak->target;
     }
@@ -334,7 +337,7 @@ void PingsLinesRenderer::DrawShadowstepLine(IDirect3DDevice9*)
         return;
     }
 
-    const GW::Agent* player = GW::Agents::GetPlayer();
+    const GW::Agent* player = GW::Agents::GetControlledCharacter();
     if (player == nullptr) {
         return;
     }
@@ -353,7 +356,7 @@ void PingsLinesRenderer::DrawRecallLine(IDirect3DDevice9*)
     }
 
     const GW::Buff* recall = GW::Effects::GetPlayerBuffBySkillId(GW::Constants::SkillID::Recall);
-    const GW::Agent* player = recall && recall->skill_id != GW::Constants::SkillID::No_Skill ? GW::Agents::GetPlayer() : nullptr;
+    const GW::Agent* player = recall && recall->skill_id != GW::Constants::SkillID::No_Skill ? GW::Agents::GetControlledCharacter() : nullptr;
     const GW::Agent* target = player ? GW::Agents::GetAgentByID(recall_target) : nullptr;
     if (target == nullptr) {
         // This can happen if you recall something that then despawns before you drop recall.
@@ -488,7 +491,7 @@ bool PingsLinesRenderer::OnMouseMove(const float x, const float y)
         return false;
     }
 
-    const GW::AgentLiving* me = GW::Agents::GetPlayerAsAgentLiving();
+    const GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
     if (me == nullptr) {
         return false;
     }
@@ -559,7 +562,7 @@ void PingsLinesRenderer::SendQueue()
         }
         DrawOnCompass(static_cast<size_t>(session_id), queue.size(), pts);
         GW::UI::UIPacket::kCompassDraw packet = {
-            .player_number = GW::Agents::GetPlayerId(),
+            .player_number = GW::PlayerMgr::GetPlayerNumber(),
             .session_id = static_cast<size_t>(session_id),
             .number_of_points = queue.size(),
             .points = pts

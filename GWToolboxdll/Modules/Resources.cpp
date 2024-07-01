@@ -30,6 +30,7 @@
 #include "GwDatTextureModule.h"
 #include "GWCA/GameEntities/Skill.h"
 #include "GWCA/Managers/SkillbarMgr.h"
+#include <Constants/EncStrings.h>
 
 namespace {
     const char* d3dErrorMessage(HRESULT code)
@@ -83,6 +84,7 @@ namespace {
 
     std::map<std::string, IDirect3DTexture9**> damagetype_icons;
     std::map<GW::Constants::MapID, GuiUtils::EncString*> map_names;
+    std::map<GW::Constants::MapID, GuiUtils::EncString*> region_names;
     std::unordered_map<GW::Constants::Language, std::unordered_map<uint32_t, GuiUtils::EncString*>> encoded_string_ids;
     std::filesystem::path current_settings_folder;
     constexpr size_t MAX_WORKERS = 5;
@@ -499,7 +501,7 @@ bool Resources::Download(const std::filesystem::path& path_to_file, const std::s
     return true;
 }
 
-void Resources::Download(const std::filesystem::path& path_to_file, const std::string& url, AsyncLoadCallback callback) const
+void Resources::Download(const std::filesystem::path& path_to_file, const std::string& url, const AsyncLoadCallback& callback) const
 {
     EnqueueWorkerTask([this, path_to_file, url, callback] {
         std::wstring error_message;
@@ -518,12 +520,19 @@ void Resources::Download(const std::filesystem::path& path_to_file, const std::s
 
 bool Resources::Download(const std::string& url, std::string& response)
 {
+    int statusCode = 0;
+    return Download(url, response, statusCode);
+}
+
+bool Resources::Download(const std::string& url, std::string& response, int& statusCode)
+{
     RestClient r;
     InitRestClient(&r);
     r.SetUrl(url.c_str());
     r.Execute();
+    statusCode = r.GetStatusCode();
     if (!r.IsSuccessful()) {
-        StrSprintf(response, "Failed to download %s, curl status %d %s", url.c_str(), r.GetStatusCode(), r.GetStatusStr());
+        response = std::format("Failed to download {}, curl status {} {}", url, r.GetStatusCode(), r.GetStatusStr());
         return false;
     }
     response = std::move(r.GetContent());
@@ -534,7 +543,95 @@ void Resources::Download(const std::string& url, AsyncLoadMbCallback callback, v
 {
     EnqueueWorkerTask([url, callback, context] {
         std::string response;
-        bool ok = Download(url, response);
+        int statusCode = 0;
+        bool ok = Download(url, response, statusCode);
+        EnqueueMainTask([callback, ok, response, context] {
+            callback(ok, response, context);
+        });
+    });
+}
+
+void Resources::Download(const std::string& url, AsyncLoadMbCallback callback, void* context, std::chrono::seconds cache_duration)
+{
+    const auto hash_name = [](const std::filesystem::path& file_name) -> std::filesystem::path {
+        const auto str = file_name.string();
+        const auto bytes_to_hash = std::vector<byte>(str.begin(), str.end());
+        auto hash = std::vector<byte>(WC_SHA256_DIGEST_SIZE);
+        wc_Sha256Hash(bytes_to_hash.data(), bytes_to_hash.size(), hash.data());
+        std::stringstream hexstream;
+        hexstream << std::hex << std::setfill('0');
+        for (auto b : hash) {
+            hexstream << std::setw(2) << static_cast<unsigned>(b);
+        }
+        const auto hash_str = hexstream.str();
+        const auto hash_file = std::filesystem::path(hash_str);
+        return hash_file;
+    };
+
+    const auto get_cache_modified_time = [](const std::filesystem::path& file_name) -> std::optional<std::filesystem::file_time_type> {
+        if (!std::filesystem::exists(file_name)) {
+            return std::optional<std::filesystem::file_time_type>();
+        }
+
+        const auto file_time = std::filesystem::last_write_time(file_name);
+        return file_time;
+    };
+
+    const auto load_from_cache = [](const std::filesystem::path& file_name) -> std::optional<std::string> {
+        std::ifstream cache_file(file_name);
+        if (!cache_file.is_open()) {
+            return {};
+        }
+
+        std::string contents((std::istreambuf_iterator<char>(cache_file)), std::istreambuf_iterator<char>());
+        return contents;
+    };
+
+    const auto save_to_cache = [](const std::filesystem::path& file_name, const std::string& content) -> bool {
+        std::filesystem::create_directories(file_name.parent_path());
+        std::ofstream cache_file(file_name);
+        if (!cache_file.is_open()) {
+            return false;
+        }
+
+        cache_file << content;
+        return true;
+    };
+
+    const auto remove_protocol = [](const std::string& url) -> std::string {
+        const std::string http = "http://";
+        const std::string https = "https://";
+
+        // Check if the URL starts with http:// or https:// and remove it
+        if (url.substr(0, http.size()) == http) {
+            return url.substr(http.size());
+        }
+        if (url.substr(0, https.size()) == https) {
+            return url.substr(https.size());
+        }
+        return url; // Return the original if no match is found
+    };
+
+    EnqueueWorkerTask([url, callback, context, &cache_duration, &get_cache_modified_time, &load_from_cache, &save_to_cache, &remove_protocol, &hash_name] {
+        const auto cache_path = Resources::GetPath("cache") / hash_name(remove_protocol(url));
+        const auto expiration = get_cache_modified_time(cache_path);
+        if (expiration.has_value() &&
+            expiration.value() - std::chrono::file_clock::now() < cache_duration) {
+            const auto response = load_from_cache(cache_path);
+            if (response.has_value()) {
+                EnqueueMainTask([callback, context, response] {
+                    callback(true, response.value(), context);
+                });
+                return;
+            }
+        }
+        std::string response;
+        int statusCode = 0;
+        bool ok = Download(url, response, statusCode);
+        if (ok ||
+            (statusCode >= 300 && statusCode < 500)) {
+            save_to_cache(cache_path, response);
+        }
         EnqueueMainTask([callback, ok, response, context] {
             callback(ok, response, context);
         });
@@ -591,7 +688,7 @@ HRESULT Resources::TryCreateTexture(IDirect3DDevice9* device, const std::filesys
     HRESULT res = D3DERR_NOTAVAILABLE;
     size_t tries = 0;
     const auto ext = path_to_file.extension();
-    while (res == D3DERR_NOTAVAILABLE && tries++ < 3) {
+    while (res == D3DERR_NOTAVAILABLE && tries++ < 5) {
         if (ext == ".dds") {
             res = DirectX::CreateDDSTextureFromFileEx(device, path_to_file.c_str(), 0, D3DPOOL_MANAGED, true, texture);
         }
@@ -600,6 +697,7 @@ HRESULT Resources::TryCreateTexture(IDirect3DDevice9* device, const std::filesys
         }
     }
     if (res != D3D_OK) {
+        std::filesystem::remove(path_to_file);
         StrSwprintf(error, L"Error loading resource from file %s - Error is %S", path_to_file.filename().wstring().c_str(), d3dErrorMessage(res));
         return res;
     }
@@ -776,7 +874,7 @@ void Resources::Update(float)
         main_mutex.unlock();
         return;
     }
-    const std::function<void()> func = std::move(main_jobs.front());
+    const auto func = std::move(main_jobs.front());
     main_jobs.pop();
     main_mutex.unlock();
     func();
@@ -835,7 +933,7 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
     ASSERT(filename && filename[0]);
     std::string filename_on_disk;
     if (width > 0) {
-        StrSprintf(filename_on_disk, "%dpx_%s", width, filename);
+        filename_on_disk = std::format("{}px_{}", width, filename);
     }
     else {
         filename_on_disk = filename;
@@ -860,9 +958,8 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
         trigger_failure_callback(callback, L"Failed to create folder %s", path.wstring().c_str());
         return texture;
     }
-    std::wstring path_to_file;
+    const auto path_to_file = std::format("{}\\{}",path.string(), filename_sanitised);
     // Check for local file
-    StrSwprintf(path_to_file, L"%s\\%S", path.wstring().c_str(), filename_sanitised.c_str());
     if (std::filesystem::exists(path_to_file)) {
         LoadTexture(texture, path_to_file, callback);
         return texture;
@@ -870,16 +967,14 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
     // No local file found; download from wiki via skill link URL
     std::string wiki_url = "https://wiki.guildwars.com/wiki/File:";
     wiki_url.append(GuiUtils::UrlEncode(filename, '_'));
-    Instance().Download(wiki_url.c_str(), [texture, filename_sanitised, callback, width](const bool ok, const std::string& response, void*) {
+    Instance().Download(wiki_url, [texture, filename_sanitised, callback, width](const bool ok, const std::string& response, void*) {
         if (!ok) {
             callback(ok, GuiUtils::StringToWString(response));
             return; // Already logged whatever errors
         }
 
-        std::string tmp_str;
         // Find a valid png or jpg image inside the HTML response, <img alt="<skill_id>" src="<location_of_image>"
-        StrSprintf(tmp_str, R"(class="fullMedia"[\s\S]*?href=['"]([^"']+))");
-        std::regex image_finder(tmp_str);
+        std::regex image_finder(R"(class="fullMedia"[\s\S]*?href=['"]([^"']+))");
         std::smatch m;
         std::regex_search(response, m, image_finder);
         if (!m.size()) {
@@ -887,8 +982,7 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
             return;
         }
         std::string image_url = m[1].str();
-        std::wstring path_to_file2;
-        StrSwprintf(path_to_file2, L"%s\\%S", path.c_str(), filename_sanitised.c_str());
+        const auto path_to_file2 = std::format("{}\\{}", path.string(), filename_sanitised);
         if (width) {
             // Divert to resized version using mediawiki's method
             image_finder = "/images/(.*)/([^/]+)$";
@@ -897,13 +991,11 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
                 trigger_failure_callback(callback, L"Regex failed evaluating GWW thumbnail from %S", image_url.c_str());
                 return;
             }
-            StrSprintf(tmp_str, "/images/thumb/%s/%s/%dpx-%s", m[1].str().c_str(), m[2].str().c_str(), width, m[2].str().c_str());
-            image_url = tmp_str;
+            image_url = std::format("/images/thumb/{}/{}/{}px-{}", m[1].str(), m[2].str(), width, m[2].str());
         }
         // https://wiki.guildwars.com/images/thumb/5/5c/Eternal_Protector_of_Tyria.jpg/150px-Eternal_Protector_of_Tyria.jpg
-        if (strncmp(image_url.c_str(), "http", 4) != 0) {
-            StrSprintf(tmp_str, "https://wiki.guildwars.com%s", image_url.c_str());
-            image_url = tmp_str;
+        if (!image_url.starts_with("http")) {
+            image_url = std::format("https://wiki.guildwars.com{}", image_url);
         }
         LoadTexture(texture, path_to_file2, image_url, callback);
     });
@@ -1016,11 +1108,74 @@ GuiUtils::EncString* Resources::GetMapName(const GW::Constants::MapID map_id)
     if (found != map_names.end()) {
         return found->second;
     }
+    if (map_id == GW::Constants::MapID::None) {
+        map_names[map_id] = DecodeStringId(0x3);
+        return map_names[map_id];
+    }
     const auto area = GW::Map::GetMapInfo(map_id);
-    ASSERT(area);
-    const auto ret = DecodeStringId(area->name_id);
-    map_names[map_id] = ret;
-    return ret;
+    ASSERT(area && area->name_id);
+    map_names[map_id] = DecodeStringId(area->name_id);
+    return map_names[map_id];
+}
+
+const wchar_t* Resources::GetRegionName(const GW::Constants::MapID map_id)
+{
+    const auto area_info = GW::Map::GetMapInfo(map_id);
+    switch (area_info->region) {
+    case GW::Region_BattleIslands:
+        return GW::EncStrings::MapRegion::BattleIsles;
+
+    // Prophecies
+    case GW::Region::Region_Maguuma:
+        return GW::EncStrings::MapRegion::MaguumaJungle;
+    case GW::Region::Region_Ascalon:
+    case GW::Region::Region_Presearing:
+        return GW::EncStrings::MapRegion::Ascalon;
+    case GW::Region::Region_Kryta:
+        return GW::EncStrings::MapRegion::Kryta;
+    case GW::Region::Region_NorthernShiverpeaks: {
+        // TODO: Southern vs northern shivers
+        return GW::EncStrings::MapRegion::NorthernShiverpeaks;
+    }
+    case GW::Region_CrystalDesert:
+        return GW::EncStrings::MapRegion::CrystalDesert;
+    case GW::Region_FissureOfWoe: {
+        // TODO: Ring of fire?
+            // TODO: Underworld
+        return GW::EncStrings::MapRegion::FissureOfWoe;
+    }
+
+    // Factions
+    case GW::Region::Region_Kurzick:
+        return GW::EncStrings::MapRegion::EchovaldForest;
+    case GW::Region::Region_Luxon:
+        return GW::EncStrings::MapRegion::TheJadeSea;
+    case GW::Region::Region_ShingJea:
+        return GW::EncStrings::MapRegion::ShingJeaIsland;
+    case GW::Region::Region_Kaineng:
+        return GW::EncStrings::MapRegion::KainengCity;
+
+    // Nightfall
+    case GW::Region::Region_Kourna:
+        return GW::EncStrings::MapRegion::Kourna;
+    case GW::Region::Region_Vaabi:
+        return GW::EncStrings::MapRegion::Vabbi;
+    case GW::Region::Region_Istan:
+        return GW::EncStrings::MapRegion::Istan;
+    case GW::Region::Region_DomainOfAnguish:
+        return GW::EncStrings::MapRegion::RealmOfTorment;
+
+    // Eye of the north
+    case GW::Region::Region_CharrHomelands:
+        return GW::EncStrings::MapRegion::CharrHomelands;
+    case GW::Region::Region_DepthsOfTyria:
+        return GW::EncStrings::MapRegion::DepthsOfTyria;
+    case GW::Region::Region_FarShiverpeaks:
+        return GW::EncStrings::MapRegion::FarShiverpeaks;
+    case GW::Region::Region_TarnishedCoast:
+        return GW::EncStrings::MapRegion::TarnishedCoast;
+    }
+    return L"\x108\107No region name yet :(\x1";
 }
 
 GuiUtils::EncString* Resources::DecodeStringId(const uint32_t enc_str_id, GW::Constants::Language language)
@@ -1100,7 +1255,7 @@ IDirect3DTexture9** Resources::GetItemImage(const std::wstring& item_name)
         }
         const std::string item_name_str = GuiUtils::WStringToString(item_name);
         // matches any characters that need to be escaped in RegEx
-        const std::regex specialChars{R"([-[\]{}()*+?.,\^$|#\s])"};
+        static const std::regex specialChars{R"([-[\]{}()*+?.,\^$|#\s])"};
         const std::string sanitized = std::regex_replace(item_name_str, specialChars, R"(\$&)");
         std::smatch m;
         // Find first png image that has an alt tag matching the html encoded title of the page

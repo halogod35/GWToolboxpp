@@ -6,15 +6,14 @@
 namespace GuiUtils {
     class EncString;
 }
-
-namespace GW::Constants {
-    enum class Profession : uint32_t;
-    enum class MapID : uint32_t;
-    enum class SkillID : uint32_t;
-    enum class Language;
-}
 namespace GW {
     struct Item;
+    namespace Constants {
+        enum class Profession : uint32_t;
+        enum class MapID : uint32_t;
+        enum class SkillID : uint32_t;
+        enum class Language;
+    }
 }
 
 class Resources : public ToolboxModule {
@@ -109,6 +108,8 @@ public:
 
     // Guaranteed to return a pointer, but may not yet be decoded.
     static GuiUtils::EncString* GetMapName(GW::Constants::MapID map_id);
+
+    static const wchar_t* GetRegionName(GW::Constants::MapID map_id);
     // Guaranteed to return a pointer, but may not yet be decoded.
     static GuiUtils::EncString* DecodeStringId(const uint32_t enc_str_id, GW::Constants::Language language = (GW::Constants::Language)0xff);
 
@@ -118,12 +119,15 @@ public:
     // download to file, blocking. If an error occurs, details are held in response string
     static bool Download(const std::filesystem::path& path_to_file, const std::string& url, std::wstring& response);
     // download to file, async, calls callback on completion. If an error occurs, details are held in response string
-    void Download(const std::filesystem::path& path_to_file, const std::string& url, AsyncLoadCallback callback) const;
+    void Download(const std::filesystem::path& path_to_file, const std::string& url, const AsyncLoadCallback& callback) const;
     // download to memory, blocking. If an error occurs, details are held in response string
     static bool Download(const std::string& url, std::string& response);
+    // download to memory, blocking. If an error occurs, details are held in response string
+    static bool Download(const std::string& url, std::string& response, int& statusCode);
     // download to memory, async, calls callback on completion. If an error occurs, details are held in response string
     static void Download(const std::string& url, AsyncLoadMbCallback callback, void* wparam = nullptr);
-
+    // download to memory, async, calls callback on completion and caches the response locally for the duration specified. If an error occurs, details are held in response string
+    static void Download(const std::string& url, AsyncLoadMbCallback callback, void* context, std::chrono::seconds cache_duration);
 
     // download to memory, blocking. If an error occurs, details are held in response string
     static bool Post(const std::string& url, const std::string& payload, std::string& response);

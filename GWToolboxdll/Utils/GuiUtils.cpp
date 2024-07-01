@@ -4,6 +4,7 @@
 
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MemoryMgr.h>
+#include <GWCA/Managers/GameThreadMgr.h>
 
 #include <Utf8.h>
 #include <fonts/fontawesome5.h>
@@ -37,6 +38,10 @@ namespace {
         }
         return wiki_prefix;*/
         return "https://wiki.guildwars.com/wiki/";
+    }
+
+    const char* GetRawWikiPrefix() {
+        return "https://wiki.guildwars.com/index.php";
     }
 
     int safe_ispunct(const char c)
@@ -151,15 +156,36 @@ namespace GuiUtils {
         return cmd;
     }
 
+    std::string WikiTemplateUrlFromTitle(const std::string& title)
+    {
+        return WikiTemplateUrlFromTitle(StringToWString(title));
+    }
+
+    std::string WikiTemplateUrlFromTitle(const std::wstring& title)
+    {
+        // @Cleanup: Should really properly url encode the string here, but modern browsers clean up after our mess. Test with Creme Brulees.
+        if (title.empty()) {
+            return GetRawWikiPrefix();
+        }
+        char cmd[256];
+        const std::string encoded = UrlEncode(WStringToString(RemoveDiacritics(title)), '_');
+        snprintf(cmd, _countof(cmd), "%s?title=%s&action=raw", GetRawWikiPrefix(), encoded.c_str());
+        return cmd;
+    }
+
     void SearchWiki(const std::wstring& term)
     {
         if (term.empty()) {
             return;
         }
-        char cmd[256];
+        const size_t buf_len = 512;
+        auto cmd = new char[buf_len];
         const std::string encoded = UrlEncode(WStringToString(RemoveDiacritics(term)));
-        ASSERT(snprintf(cmd, _countof(cmd), "%s?search=%s", GetWikiPrefix(), encoded.c_str()) != -1);
-        SendUIMessage(GW::UI::UIMessage::kOpenWikiUrl, cmd);
+        ASSERT(snprintf(cmd, buf_len, "%s?search=%s", GetWikiPrefix(), encoded.c_str()) != -1);
+        GW::GameThread::Enqueue([cmd]() {
+            GW::UI::SendUIMessage(GW::UI::UIMessage::kOpenWikiUrl, cmd);
+            delete[] cmd;
+            });
     }
 
     void OpenWiki(const std::wstring& url_path)
@@ -443,6 +469,13 @@ namespace GuiUtils {
         out[len] = 0;
         return out;
     }
+
+    std::wstring UrlEncode(const std::wstring& s, const char space_token) {
+        const auto str = WStringToString(s);
+        const auto enc = UrlEncode(str, space_token);
+        return StringToWString(enc);
+    }
+
 
     std::string UrlEncode(const std::string& s, const char space_token)
     {
@@ -894,22 +927,23 @@ namespace GuiUtils {
         return dest;
     }
 
-    void EncString::reset(const uint32_t _enc_string_id, const bool sanitise)
+    EncString* EncString::reset(const uint32_t _enc_string_id, const bool sanitise)
     {
         if (_enc_string_id && encoded_ws.length()) {
             const uint32_t this_id = GW::UI::EncStrToUInt32(encoded_ws.c_str());
             if (this_id == _enc_string_id) {
-                return;
+                return this;
             }
         }
         reset(nullptr, sanitise);
         if (_enc_string_id) {
             wchar_t out[8] = {0};
             if (!GW::UI::UInt32ToEncStr(_enc_string_id, out, _countof(out))) {
-                return;
+                return this;
             }
             encoded_ws = out;
         }
+        return this;
     }
 
     EncString* EncString::language(const GW::Constants::Language l)
@@ -922,10 +956,10 @@ namespace GuiUtils {
         return this;
     }
 
-    void EncString::reset(const wchar_t* _enc_string, const bool sanitise)
+    EncString* EncString::reset(const wchar_t* _enc_string, const bool sanitise)
     {
         if (_enc_string && wcscmp(_enc_string, encoded_ws.c_str()) == 0) {
-            return;
+            return this;
         }
         encoded_ws.clear();
         decoded_ws.clear();
@@ -935,13 +969,17 @@ namespace GuiUtils {
         if (_enc_string) {
             encoded_ws = _enc_string;
         }
+        return this;
     }
 
     std::wstring& EncString::wstring()
     {
         if (!decoded && !decoding && !encoded_ws.empty()) {
             decoding = true;
-            GW::UI::AsyncDecodeStr(encoded_ws.c_str(), OnStringDecoded, this, language_id);
+            GW::GameThread::Enqueue([&] {
+                GW::UI::AsyncDecodeStr(encoded_ws.c_str(), OnStringDecoded, this, language_id);
+                });
+
         }
         sanitise();
         return decoded_ws;
@@ -958,7 +996,7 @@ namespace GuiUtils {
 
     // ReSharper disable once CppParameterMayBeConst
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
-    void EncString::OnStringDecoded(void* param, wchar_t* decoded)
+    void EncString::OnStringDecoded(void* param, const wchar_t* decoded)
     {
         const auto context = static_cast<EncString*>(param);
         if (!(context && context->decoding && !context->decoded)) {

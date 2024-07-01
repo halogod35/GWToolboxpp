@@ -9,7 +9,7 @@
 
 #include <Widgets/WorldMapWidget.h>
 
-#include <Timer.h>
+#include "Defines.h"
 
 namespace {
     ImRect show_all_rect;
@@ -27,9 +27,10 @@ namespace {
     }
 
     void TriggerWorldMapRedraw() {
-        GW::GameThread::Enqueue([]() {
+        GW::GameThread::Enqueue([] {
             // Trigger a benign ui message e.g. guild context update; world map subscribes to this, and automatically updates the view.
-            GW::UI::SendUIMessage((GW::UI::UIMessage)0x100000ca);
+            // GW::UI::SendUIMessage((GW::UI::UIMessage)0x100000ca); // disables guild/ally chat until reloading char/map
+            GW::UI::SendUIMessage(GW::UI::UIMessage::kMapLoaded);
             });
     }
 }
@@ -58,11 +59,23 @@ void WorldMapWidget::Terminate() {
 
 void WorldMapWidget::ShowAllOutposts(const bool show = showing_all_outposts)
 {
-    if(view_all_outposts_patch.IsValid())
+    if (view_all_outposts_patch.IsValid())
         view_all_outposts_patch.TogglePatch(show);
     if (view_all_carto_areas_patch.IsValid())
         view_all_carto_areas_patch.TogglePatch(show);
     TriggerWorldMapRedraw();
+}
+
+void WorldMapWidget::LoadSettings(ToolboxIni* ini)
+{
+    ToolboxWidget::LoadSettings(ini);
+    LOAD_BOOL(showing_all_outposts);
+}
+
+void WorldMapWidget::SaveSettings(ToolboxIni* ini)
+{
+    ToolboxWidget::SaveSettings(ini);
+    SAVE_BOOL(showing_all_outposts);
 }
 
 void WorldMapWidget::Draw(IDirect3DDevice9*)

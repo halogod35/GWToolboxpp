@@ -78,9 +78,9 @@ void StringDecoderWindow::Draw(IDirect3DDevice9*)
     }
     if (!decoded.empty()) {
         // std::wstring str = GuiUtils::StringToWString(encoded);
-        Log::LogW(L"%d %ls\n",
+        /*Log::LogW(L"%d %ls\n",
                   GW::UI::EncStrToUInt32(GetEncodedString().c_str()),
-                  decoded.c_str());
+                  decoded.c_str());*/
         WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, decoded.c_str());
         //PrintEncStr(GetEncodedString().c_str());
         decoded.clear();
@@ -100,13 +100,18 @@ void StringDecoderWindow::Send() const
 
 std::wstring StringDecoderWindow::GetEncodedString() const
 {
-    std::istringstream iss(encoded);
+    std::string str = encoded;
+    if (str.contains("\\x")) {
+        static const std::regex re("\\\\x([0-9a-fA-F]{1,4})");
+        str = std::regex_replace(str, re, "0x$1 ");
+    }
+    std::istringstream iss(str);
     const std::vector results((std::istream_iterator<std::string>(iss)),
                               std::istream_iterator<std::string>());
-
     std::wstring encodedW(results.size() + 1, 0);
     size_t i = 0;
     for (i = 0; i < results.size(); i++) {
+        if (results[i] == " ") continue;
         //Log::Log("%s\n", results[i].c_str());
         unsigned int lval = 0;
         const auto base = results[i].rfind("0x", 0) == 0 ? 0 : 16;

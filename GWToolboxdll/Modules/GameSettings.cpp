@@ -41,6 +41,7 @@
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/RenderMgr.h>
+#include <GWCA/Managers/QuestMgr.h>
 
 #include <GWCA/Utilities/Hooker.h>
 
@@ -59,10 +60,11 @@
 #include <Logger.h>
 #include <Timer.h>
 #include <Defines.h>
-#include <GWCA/Managers/QuestMgr.h>
+
 #include <d3d9on12.h>
 
 #include "Windows/FriendListWindow.h"
+#include <Keys.h>
 
 #pragma warning(disable : 6011)
 #pragma comment(lib,"Version.lib")
@@ -197,6 +199,7 @@ namespace {
     bool block_sugar_rush_effect = false;
     bool block_snowman_summoner = false;
     bool block_party_poppers = false;
+    bool block_fireworks = false;
     bool block_bottle_rockets = false;
     bool block_ghostinthebox_effect = false;
     bool block_sparkly_drops_effect = false;
@@ -433,9 +436,6 @@ namespace {
     constexpr int modifier_key_item_descriptions = VK_MENU;
     int modifier_key_item_descriptions_key_state = 0;
 
-    using GetItemDescription_pt = void(__cdecl*)(uint32_t item_id, uint32_t flags, uint32_t quantity, uint32_t unk, wchar_t** out, wchar_t** out2);
-    GetItemDescription_pt GetItemDescription_Func = nullptr, GetItemDescription_Ret = nullptr;
-
     // Key held to show/hide skill descriptions
     constexpr int modifier_key_skill_descriptions = VK_MENU;
     int modifier_key_skill_descriptions_key_state = 0;
@@ -538,7 +538,7 @@ namespace {
         }
         const GW::Player* first_player = nullptr;
         const GW::Player* next_player = nullptr;
-        const GW::AgentLiving* me = GW::Agents::GetPlayerAsAgentLiving();
+        const GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
         if (!me) {
             // Can't find myself
             Log::Error("Failed to find me");
@@ -637,7 +637,7 @@ namespace {
                 return pending_reinvite.reset();
             }
             case PendingReinvite::Stage::InviteHero: {
-                const GW::HeroInfo* hero_info = GetHeroInfo(pending_reinvite.identifier);
+                const GW::HeroInfo* hero_info = GW::PartyMgr::GetHeroInfo(pending_reinvite.identifier);
                 if (!hero_info) {
                     Log::Error("Failed to get hero info for %d", pending_reinvite.identifier);
                     return pending_reinvite.reset();
@@ -702,6 +702,9 @@ namespace {
         else {
             return; // Loading
         }
+        const auto tooltip = GW::UI::GetCurrentTooltip();
+        if (!tooltip)
+            return;
         // Trigger re-render of item tooltip
         const auto hovered_item = GW::Items::GetHoveredItem();
         if (!hovered_item) {
@@ -731,10 +734,10 @@ namespace {
         }
         GW::GameThread::Enqueue([items = items_triggered] {
             if (items[0]) {
-                SendUIMessage(GW::UI::UIMessage::kItemUpdated, &items[0]);
+                GW::UI::SendFrameUIMessage(GW::UI::GetChildFrame(GW::UI::GetRootFrame(), 0xffffffff), GW::UI::UIMessage::kItemUpdated, &items[0]);
             }
             if (items[1]) {
-                SendUIMessage(GW::UI::UIMessage::kItemUpdated, &items[1]);
+                GW::UI::SendFrameUIMessage(GW::UI::GetChildFrame(GW::UI::GetRootFrame(), 0xffffffff), GW::UI::UIMessage::kItemUpdated, &items[0]);
             }
         });
     }
@@ -766,7 +769,7 @@ namespace {
         }
         if (GW::SkillbarMgr::GetHoveredSkill()) {
             GW::GameThread::Enqueue([skill] {
-                SendUIMessage(GW::UI::UIMessage::kTitleProgressUpdated, (void*)skill->title);
+                GW::UI::SendFrameUIMessage(GW::UI::GetChildFrame(GW::UI::GetRootFrame(), 0xffffffff), GW::UI::UIMessage::kTitleProgressUpdated, (void*)skill->title);
             });
         }
     }
@@ -815,7 +818,7 @@ namespace {
         uint32_t override_manual_agent_id = 0;
         const GW::Item* target_item = nullptr;
         const auto agents = GW::Agents::GetAgentArray();
-        const auto me = agents ? GW::Agents::GetPlayer() : nullptr;
+        const auto me = agents ? GW::Agents::GetControlledCharacter() : nullptr;
         if (!me) {
             return;
         }
@@ -1004,25 +1007,87 @@ namespace {
         }
     }
 
-    void CmdReinvite(const wchar_t*, const int, const LPWSTR*)
+    void CHAT_CMD_FUNC(CmdReinvite)
     {
         pending_reinvite.reset(current_party_target_id);
     }
-}
 
-// Block full item descriptions
-void GameSettings::OnGetItemDescription(const uint32_t item_id, const uint32_t flags, const uint32_t quantity, const uint32_t unk, wchar_t** name_out, wchar_t** description_out)
-{
-    GW::Hook::EnterHook();
-    bool block_description = disable_item_descriptions_in_outpost && IsOutpost() || disable_item_descriptions_in_explorable && IsExplorable();
-    block_description = block_description && GetKeyState(modifier_key_item_descriptions) >= 0;
-    GetItemDescription_Ret(item_id, flags, quantity, unk, name_out, block_description ? nullptr : description_out);
-
-    if (block_description && description_out) {
-        *description_out = nullptr;
+    bool ShouldBlockEffect(uint32_t effect_id) {
+        if (effect_id >= 1292 && effect_id <= 1303) {
+            return block_fireworks;
+        }
+        if (effect_id >= 1685 && effect_id <= 1687) {
+            return block_fireworks;
+        }
+        switch (effect_id) {
+        case 905:
+            return block_snowman_summoner;
+        case 1688:
+            return block_bottle_rockets;
+        case 1689:
+            return block_party_poppers;
+        case 758:  // Chocolate bunny
+        case 2063: // e.g. Fruitcake, sugary blue drink
+        case 1176: // e.g. Delicious cake
+            return block_sugar_rush_effect;
+        case 1491:
+            return block_transmogrify_effect;
+        }
+        return false;
     }
 
-    GW::Hook::LeaveHook();
+    void OnPlayEffect(GW::HookStatus* status, const GW::Packet::StoC::PlayEffect* pak)
+    {
+        status->blocked |= ShouldBlockEffect(pak->effect_id);
+    }
+
+    // Block full item descriptions
+    void OnGetItemDescription(uint32_t, uint32_t, uint32_t, uint32_t, wchar_t**, wchar_t** out_desc) 
+    {
+        bool block_description = disable_item_descriptions_in_outpost && IsOutpost() || disable_item_descriptions_in_explorable && IsExplorable();
+        block_description = block_description && GetKeyState(modifier_key_item_descriptions) >= 0;
+
+        if (block_description && out_desc) {
+            *out_desc = nullptr;
+        }
+    }
+
+    bool pending_toggle_mouse_walk_on_key_up = false;
+    long toggle_mouse_walk_key = 0;
+    void UpdateMouseWalkToggle() {
+        if (toggle_mouse_walk_key == ImGuiKey_None)
+            return;
+        if (pending_toggle_mouse_walk_on_key_up) {
+            if (!ImGui::IsKeyDown(toggle_mouse_walk_key)) {
+                GW::UI::SetPreference(GW::UI::FlagPreference::DisableMouseWalking, !GetPreference(GW::UI::FlagPreference::DisableMouseWalking));
+                pending_toggle_mouse_walk_on_key_up = false;
+            }
+        }
+        else {
+            if (ImGui::IsKeyDown(toggle_mouse_walk_key)) {
+                GW::UI::SetPreference(GW::UI::FlagPreference::DisableMouseWalking, !GetPreference(GW::UI::FlagPreference::DisableMouseWalking));
+                pending_toggle_mouse_walk_on_key_up = true;
+            }
+        }
+    }
+
+    const wchar_t* GetPartySearchLeader(uint32_t party_search_id) {
+        const auto p = GW::PartyMgr::GetPartySearch(party_search_id);
+        return p && p->party_leader && *p->party_leader ? p->party_leader : nullptr;
+    }
+
+    GW::HookEntry OnPostUIMessage_HookEntry;
+    void OnPostUIMessage(GW::HookStatus*, GW::UI::UIMessage message_id, void* wParam, void*) {
+        switch (message_id) {
+        case GW::UI::UIMessage::kPartySearchInviteSent: {
+            // Automatically send a party window invite when a party search invite is sent
+            const auto packet = (GW::UI::UIPacket::kPartySearchInvite*)wParam;
+            if(GW::PartyMgr::GetIsLeader())
+                GW::PartyMgr::InvitePlayer(GetPartySearchLeader(packet->source_party_search_id));            
+        } break;
+        }
+    }
+
 }
 
 bool GameSettings::GetSettingBool(const char* setting)
@@ -1256,12 +1321,7 @@ void GameSettings::Initialize()
         remove_skill_warmup_duration_patch.SetPatch(address, "\x90\x90", 2);
     }
 
-    // This could be done with patches if we wanted to still show description for weapon sets and merchants etc, but its more signatures to log.
-    GetItemDescription_Func = (GetItemDescription_pt)GW::Scanner::Find("\x8b\xc3\x25\xfd\x00\x00\x00\x3c\xfd", "xxxxxxxxx", -0x5f);
-    if (GetItemDescription_Func) {
-        GW::HookBase::CreateHook((void**)&GetItemDescription_Func, OnGetItemDescription, (void**)&GetItemDescription_Ret);
-        GW::HookBase::EnableHooks(GetItemDescription_Func);
-    }
+    ItemDescriptionHandler::RegisterDescriptionCallback(OnGetItemDescription, 9999);
 
     // Call our CreateCodedTextLabel function instead of default CreateCodedTextLabel for patching skill descriptions
     address = GW::Scanner::FindAssertion("p:\\code\\gw\\ui\\game\\gmtipskill.cpp", "!(m_tipSkillFlags & TipSkillMsgCreate::FLAG_SHOW_ENABLE_AI_HINT)", 0x7b);
@@ -1290,7 +1350,7 @@ void GameSettings::Initialize()
     GW::HookBase::CreateHook((void**)&ShowAgentExperienceGain_Func, OnShowAgentExperienceGain, reinterpret_cast<void**>(&ShowAgentExperienceGain_Ret));
     GW::HookBase::EnableHooks(ShowAgentExperienceGain_Func);
 
-    RegisterUIMessageCallback(&OnDialog_Entry, GW::UI::UIMessage::kSendDialog, bind_member(this, &GameSettings::OnFactionDonate));
+    RegisterUIMessageCallback(&OnDialog_Entry, GW::UI::UIMessage::kSendAgentDialog, bind_member(this, &GameSettings::OnFactionDonate));
     RegisterUIMessageCallback(&OnDialog_Entry, GW::UI::UIMessage::kSendLoadSkillbar, &OnPreLoadSkillBar);
     GW::StoC::RegisterPacketCallback(&OnDialog_Entry, GAME_SMSG_SKILLBAR_UPDATE, OnPostLoadSkillBar, 0x8000);
     GW::StoC::RegisterPacketCallback(&OnDialog_Entry, GAME_SMSG_SKILL_UPDATE_SKILL_COUNT_1, OnUpdateSkillCount, -0x3000);
@@ -1319,6 +1379,7 @@ void GameSettings::Initialize()
             status->blocked = true;
         });*/
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::TradeStart>(&TradeStart_Entry, OnTradeStarted);
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PlayEffect>(&TradeStart_Entry, OnPlayEffect);
     GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::PartyInviteReceived_Create>(&PartyPlayerAdd_Entry, OnPartyInviteReceived);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PartyPlayerAdd>(&PartyPlayerAdd_Entry, bind_member(this, &GameSettings::OnPartyPlayerJoined));
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GameSrvTransfer>(&GameSrvTransfer_Entry, OnMapTravel);
@@ -1353,7 +1414,7 @@ void GameSettings::Initialize()
     RegisterUIMessageCallback(&OnPreSendDialog_Entry, GW::UI::UIMessage::kSendPingWeaponSet, OnPingWeaponSet);
 
     constexpr GW::UI::UIMessage dialog_ui_messages[] = {
-        GW::UI::UIMessage::kSendDialog,
+        GW::UI::UIMessage::kSendAgentDialog,
         GW::UI::UIMessage::kDialogBody,
         GW::UI::UIMessage::kDialogButton
     };
@@ -1374,6 +1435,14 @@ void GameSettings::Initialize()
     for (const auto message_id : party_target_ui_messages) {
         RegisterUIMessageCallback(&OnPostSendDialog_Entry, message_id, OnPartyTargetChanged, 0x8000);
     }
+
+    constexpr GW::UI::UIMessage post_ui_messages[] = {
+        GW::UI::UIMessage::kPartySearchInviteSent
+    };
+    for (const auto message_id : post_ui_messages) {
+        RegisterUIMessageCallback(&OnPostUIMessage_HookEntry, message_id, OnPostUIMessage, 0x8000);
+    }
+    
 
     GW::Chat::CreateCommand(L"reinvite", CmdReinvite);
 
@@ -1420,7 +1489,7 @@ void GameSettings::MessageOnPartyChange()
         return; // Don't need to check, or not an outpost.
     }
     GW::PartyInfo* current_party = GW::PartyMgr::GetPartyInfo();
-    const GW::AgentLiving* me = GW::Agents::GetPlayerAsAgentLiving();
+    const GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
     if (!me || !current_party || !current_party->players.valid()) {
         return; // Party not ready yet.
     }
@@ -1540,6 +1609,7 @@ void GameSettings::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(block_transmogrify_effect);
     LOAD_BOOL(block_sugar_rush_effect);
     LOAD_BOOL(block_snowman_summoner);
+    LOAD_BOOL(block_fireworks);
     LOAD_BOOL(block_party_poppers);
     LOAD_BOOL(block_bottle_rockets);
     LOAD_BOOL(block_ghostinthebox_effect);
@@ -1596,14 +1666,6 @@ void GameSettings::LoadSettings(ToolboxIni* ini)
 void GameSettings::RegisterSettingsContent()
 {
     ToolboxModule::RegisterSettingsContent();
-    ToolboxModule::RegisterSettingsContent(
-        "Inventory Settings", ICON_FA_BOXES,
-        [this](const std::string&, const bool is_showing) {
-            if (!is_showing) {
-                return;
-            }
-            DrawInventorySettings();
-        }, 0.9f);
 
     ToolboxModule::RegisterSettingsContent(
         "Party Settings", ICON_FA_USERS,
@@ -1622,6 +1684,15 @@ void GameSettings::RegisterSettingsContent()
             }
         },
         0.9f);
+
+    ToolboxModule::RegisterSettingsContent(
+        "Inventory Settings", ICON_FA_BOXES,
+        [this](const std::string&, const bool is_showing) {
+            if (is_showing) {
+                DrawInventorySettings();
+            }
+        },
+        0.9f);
 }
 
 void GameSettings::Terminate()
@@ -1635,6 +1706,7 @@ void GameSettings::Terminate()
     remove_skill_warmup_duration_patch.Reset();
 
     GW::UI::RemoveUIMessageCallback(&OnQuestUIMessage_HookEntry);
+    GW::UI::RemoveUIMessageCallback(&OnPostUIMessage_HookEntry);
 }
 
 void GameSettings::SaveSettings(ToolboxIni* ini)
@@ -1695,6 +1767,7 @@ void GameSettings::SaveSettings(ToolboxIni* ini)
 
     SAVE_BOOL(block_transmogrify_effect);
     SAVE_BOOL(block_sugar_rush_effect);
+    SAVE_BOOL(block_fireworks);
     SAVE_BOOL(block_snowman_summoner);
     SAVE_BOOL(block_party_poppers);
     SAVE_BOOL(block_bottle_rockets);
@@ -1853,7 +1926,6 @@ void GameSettings::DrawSettingsInternal()
     }
     ImGui::Checkbox("Apply Collector's Edition animations on player dance", &collectors_edition_emotes);
     ImGui::ShowHelp("Only applies to your own character");
-    ImGui::ShowHelp("This should make you stop to cast skills earlier by re-triggering the skill cast when in range.");
     ImGui::Checkbox("Auto-cancel Unyielding Aura when re-casting", &drop_ua_on_cast);
     ImGui::Checkbox("Auto use available keys when interacting with locked chest", &auto_open_locked_chest_with_key);
     ImGui::Checkbox("Auto use lockpick when interacting with locked chest", &auto_open_locked_chest);
@@ -1887,6 +1959,7 @@ void GameSettings::DrawSettingsInternal()
     ImGui::NextSpacedElement();
     ImGui::Checkbox("Snowman Summoners", &block_snowman_summoner);
     ImGui::ShowHelp(doesnt_affect_me);
+    ImGui::Checkbox("Fireworks", &block_fireworks);
 #if 0
     //@Cleanup: Ghost in the box spawn effect suppressed, but still need to figure out how to suppress the death effect.
     ImGui::SameLine(column_spacing); ImGui::Checkbox("Ghost-in-the-box", &block_ghostinthebox_effect);
@@ -1932,6 +2005,8 @@ void GameSettings::DrawSettingsInternal()
     if (ImGui::Checkbox("Block full screen message when entering a new area", &block_enter_area_message)) {
         skip_map_entry_message_patch.TogglePatch(block_enter_area_message);
     }
+    char buf[64] = "None";
+    ImGui::ChooseKey("Hold key to toggle mouse walk:",buf,_countof(buf), &toggle_mouse_walk_key);
 }
 
 void GameSettings::FactionEarnedCheckAndWarn()
@@ -2001,6 +2076,7 @@ void GameSettings::FactionEarnedCheckAndWarn()
 
 void GameSettings::Update(float)
 {
+    UpdateMouseWalkToggle();
     UpdateSkillTooltip();
     UpdateReinvite();
     UpdateItemTooltip();
@@ -2096,7 +2172,7 @@ void GameSettings::OnPlayerJoinInstance(GW::HookStatus*, GW::Packet::StoC::Playe
     if (!(pak->player_name && GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost)) {
         return; // Only message in an outpost.
     }
-    if (TIMER_DIFF(instance_entered_at) < 2000 && GW::Agents::GetPlayerId()) {
+    if (!(TIMER_DIFF(instance_entered_at) > 2000 && GW::Agents::GetControlledCharacter())) {
         return; // Only been in this map for less than 2 seconds or current player not loaded in yet; avoids spam on map load.
     }
     if (GW::Agents::GetAgentByID(pak->agent_id)) {
@@ -2158,28 +2234,8 @@ void GameSettings::OnAgentMarker(GW::HookStatus*, GW::Packet::StoC::GenericValue
 // Block annoying tonic sounds/effects from other players
 void GameSettings::OnAgentEffect(GW::HookStatus* status, const GW::Packet::StoC::GenericValue* pak)
 {
-    if (pak->agent_id != GW::Agents::GetPlayerId()) {
-        switch (pak->value) {
-            case 905:
-                status->blocked = block_snowman_summoner;
-                break;
-            case 1688:
-                status->blocked = block_bottle_rockets;
-                break;
-            case 1689:
-                status->blocked = block_party_poppers;
-                break;
-            case 758:  // Chocolate bunny
-            case 2063: // e.g. Fruitcake, sugary blue drink
-            case 1176: // e.g. Delicious cake
-                status->blocked = block_sugar_rush_effect;
-                break;
-            case 1491:
-                status->blocked = block_transmogrify_effect;
-                break;
-            default:
-                break;
-        }
+    if (pak->agent_id != GW::Agents::GetControlledCharacterId()) {
+        status->blocked |= ShouldBlockEffect(pak->value);
     }
 }
 
@@ -2204,7 +2260,7 @@ void GameSettings::OnUpdateAgentState(GW::HookStatus*, GW::Packet::StoC::AgentSt
 // Apply Collector's Edition animations on player dancing,
 void GameSettings::OnAgentLoopingAnimation(GW::HookStatus*, const GW::Packet::StoC::GenericValue* pak)
 {
-    if (!(pak->agent_id == GW::Agents::GetPlayerId() && collectors_edition_emotes)) {
+    if (!(pak->agent_id == GW::Agents::GetControlledCharacterId() && collectors_edition_emotes)) {
         return;
     }
     static GW::Packet::StoC::GenericValue pak2;
@@ -2213,7 +2269,7 @@ void GameSettings::OnAgentLoopingAnimation(GW::HookStatus*, const GW::Packet::St
     pak2.value = pak->value; // Glowing hands, any profession
     if (pak->value == 0x43394f1d) {
         // 0x31939cbb = /dance, 0x43394f1d = /dancenew
-        switch (static_cast<GW::Constants::Profession>(GW::Agents::GetPlayerAsAgentLiving()->primary)) {
+        switch (static_cast<GW::Constants::Profession>(GW::Agents::GetControlledCharacter()->primary)) {
             case GW::Constants::Profession::Assassin:
             case GW::Constants::Profession::Ritualist:
             case GW::Constants::Profession::Dervish:
@@ -2314,52 +2370,6 @@ void GameSettings::OnServerMessage(const GW::HookStatus*, GW::Packet::StoC::Mess
     if (wmemcmp(msg, L"\x8101\x641F\x86C3\xE149\x53E8", 5) == 0 || wmemcmp(msg, L"\x8101\x641E\xE7AD\xEF64\x1676", 5) == 0) {
         GW::Chat::SendChat('/', "age2");
     }
-}
-
-
-// Allow clickable name when a player pings "I'm following X" or "I'm targeting X"
-void GameSettings::OnLocalChatMessage(GW::HookStatus* status, const GW::Packet::StoC::MessageLocal* pak)
-{
-    if (status->blocked) {
-        return; // Sender blocked, packet handled.
-    }
-    if (pak->channel != std::to_underlying(GW::Chat::Channel::CHANNEL_GROUP) || !pak->player_number) {
-        return; // Not team chat or no sender
-    }
-    const auto core = GetMessageCore();
-    if (core[0] != 0x778 && core[0] != 0x781) {
-        return; // Not "I'm Following X" or "I'm Targeting X" message.
-    }
-    std::wstring message(core);
-    size_t start_idx = message.find(L"\xba9\x107");
-    if (start_idx == std::wstring::npos) {
-        return; // Not a player name.
-    }
-    start_idx += 2;
-    const size_t end_idx = message.find(L'\x1', start_idx);
-    if (end_idx == std::wstring::npos) {
-        return; // Not a player name, this should never happen.
-    }
-    const auto player_pinged = SanitizePlayerName(message.substr(start_idx, end_idx));
-    if (player_pinged.empty()) {
-        return; // No recipient
-    }
-    const auto sender = GW::PlayerMgr::GetPlayerByID(pak->player_number);
-    if (!sender) {
-        return; // No sender
-    }
-    if (flash_window_on_name_ping && GetPlayerName() == player_pinged) {
-        FlashWindow(); // Flash window - we've been followed!
-    }
-    // Allow clickable player name
-    message.insert(start_idx, L"<a=1>");
-    message.insert(end_idx + 5, L"</a>");
-    PendingChatMessage* m = PendingChatMessage::queuePrint(GW::Chat::Channel::CHANNEL_GROUP, message.c_str(), sender->name_enc);
-    if (m) {
-        ChatSettings::AddPendingMessage(m);
-    }
-    ClearMessageCore();
-    status->blocked = true; // consume original packet.
 }
 
 // Automatic /age on vanquish
@@ -2489,7 +2499,7 @@ void GameSettings::OnAgentStartCast(GW::HookStatus*, GW::UI::UIMessage, void* wP
         uint32_t agent_id;
         GW::Constants::SkillID skill_id;
     }* casting = static_cast<Casting*>(wParam);
-    if (casting->agent_id == GW::Agents::GetPlayerId() && casting->skill_id == GW::Constants::SkillID::Unyielding_Aura) {
+    if (casting->agent_id == GW::Agents::GetControlledCharacterId() && casting->skill_id == GW::Constants::SkillID::Unyielding_Aura) {
         // Cancel UA before recast
         const GW::Buff* buff = GW::Effects::GetPlayerBuffBySkillId(casting->skill_id);
         if (buff && buff->skill_id != GW::Constants::SkillID::No_Skill) {

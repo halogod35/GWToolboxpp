@@ -24,6 +24,7 @@
 #include <Windows/HeroBuildsWindow.h>
 
 #include "GWToolbox.h"
+#include "GWCA/GameEntities/Skill.h"
 
 constexpr const wchar_t* INI_FILENAME = L"herobuilds.ini";
 
@@ -33,7 +34,7 @@ namespace {
     // hero index is an arbitrary index.
     // We aim to have the same order as in the gw client.
     // Razah is after the mesmers because all players that don't have mercenaries have it set as mesmer.
-    constexpr HeroID HeroIndexToID[] = {
+    constexpr std::array HeroIndexToID = {
         HeroID::NoHero,
         HeroID::Goren,
         HeroID::Koss,
@@ -74,8 +75,6 @@ namespace {
         HeroID::Merc8
     };
 
-    constexpr auto hero_count = _countof(HeroIndexToID);
-
     const char* HeroName[] = {
         "No Hero", "Norgu", "Goren", "Tahlkora",
         "Master Of Whispers", "Acolyte Jin", "Koss", "Dunkoro",
@@ -102,7 +101,7 @@ namespace {
         if (!party_heros.valid()) {
             return ret;
         }
-        const GW::AgentLiving* me = GW::Agents::GetPlayerAsAgentLiving();
+        const GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
         if (!me) {
             return ret;
         }
@@ -143,7 +142,7 @@ GW::HeroPartyMember* HeroBuildsWindow::GetPartyHeroByID(const HeroID hero_id, si
     if (!party_heros.valid()) {
         return nullptr;
     }
-    const GW::AgentLiving* me = GW::Agents::GetPlayerAsAgentLiving();
+    const GW::AgentLiving* me = GW::Agents::GetControlledCharacter();
     if (!me) {
         return nullptr;
     }
@@ -210,10 +209,32 @@ void HeroBuildsWindow::Draw(IDirect3DDevice9*)
             }
             if (ImGui::Button("Add Teambuild", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
                 auto tb = TeamHeroBuild("");
-                tb.builds.reserve(8); // at this point why don't we use a static array ??
-                tb.builds.push_back(HeroBuild("", "", -2));
-                for (auto i = 0; i < 7; i++) {
-                    tb.builds.push_back(HeroBuild("", ""));
+                tb.edit_open = true;
+                for (auto i = 0; i < 8; i++) {
+                    tb.builds[i] = HeroBuild("", "", i == 0 ? -2 : 0);
+                }
+                builds_changed = true;
+                teambuilds.push_back(tb);
+            }
+            if (ImGui::Button("Add Teambuild from current", ImVec2(ImGui::GetContentRegionAvail().x, 0))) {
+                auto tb = TeamHeroBuild("");
+                tb.edit_open = true;
+                for (auto i = 0u; i < 8; i++) {
+                    const auto skill_template = GW::SkillbarMgr::GetSkillTemplate(i);
+                    char buf[BUFFER_SIZE]{};
+                    GW::SkillbarMgr::EncodeSkillTemplate(skill_template, buf, BUFFER_SIZE);
+                    constexpr std::string_view empty_code = "OAAAAAAAAAAAAAAA";
+                    const auto party_info = GW::PartyMgr::GetPartyInfo();
+                    const auto hero_id = party_info && party_info->heroes.size() > i - 1 ? party_info->heroes[i - 1].hero_id : HeroID::NoHero;
+                    const auto it = std::ranges::find_if(HeroIndexToID, [hero_id](const auto& p) { return p == hero_id; });
+                    const GW::HeroFlag* flag = GetHeroFlagInfo(hero_id);
+                    if (it != HeroIndexToID.end()) {
+                        const auto hero_idx = std::distance(HeroIndexToID.begin(), it);
+                        tb.builds[i] = HeroBuild("", empty_code != buf ? buf : "", hero_idx, 0, static_cast<uint32_t>(flag ? flag->hero_behavior : GW::HeroBehavior::Guard));
+                    }
+                    else {
+                        tb.builds[i] = HeroBuild("", empty_code != buf ? buf : "");
+                    }
                 }
 
                 builds_changed = true;
@@ -289,35 +310,36 @@ void HeroBuildsWindow::Draw(IDirect3DDevice9*)
                     ImGui::PopItemWidth();
                 }
                 else {
-                    if (ImGui::MyCombo("###heroid", "Choose Hero", &build.hero_index,
-                                       [](void*, const int idx, const char** out_text) -> bool {
-                                           if (idx < 0) {
-                                               return false;
-                                           }
-                                           if (idx >= hero_count) {
-                                               return false;
-                                           }
-                                           const auto id = HeroIndexToID[idx];
-                                           if (id < HeroID::Merc1 || id > HeroID::Merc8) {
-                                               *out_text = HeroName[HeroIndexToID[idx]];
-                                               return true;
-                                           }
-                                           bool match = false;
-                                           const auto ctx = GW::GetGameContext();
-                                           auto& hero_array = ctx->world->hero_info;
-                                           for (const auto& hero : hero_array) {
-                                               if (hero.hero_id == id) {
-                                                   match = true;
-                                                   wcstombs(MercHeroNames[id - HeroID::Merc1], hero.name, 20);
-                                                   *out_text = MercHeroNames[id - HeroID::Merc1];
-                                               }
-                                           }
-                                           if (!match) {
-                                               *out_text = HeroName[id];
-                                           }
-                                           return true;
-                                       },
-                                       nullptr, hero_count)) {
+                    if (ImGui::MyCombo(
+                        "###heroid", "Choose Hero", &build.hero_index,
+                        [](void*, const int idx, const char** out_text) -> bool {
+                            if (idx < 0) {
+                                return false;
+                            }
+                            if (idx >= static_cast<int>(HeroIndexToID.size())) {
+                                return false;
+                            }
+                            const auto id = HeroIndexToID.at(idx);
+                            if (id < HeroID::Merc1 || id > HeroID::Merc8) {
+                                *out_text = HeroName[HeroIndexToID.at(idx)];
+                                return true;
+                            }
+                            bool match = false;
+                            const auto ctx = GW::GetGameContext();
+                            auto& hero_array = ctx->world->hero_info;
+                            for (const auto& hero : hero_array) {
+                                if (hero.hero_id == id) {
+                                    match = true;
+                                    wcstombs(MercHeroNames[id - HeroID::Merc1], hero.name, 20);
+                                    *out_text = MercHeroNames[id - HeroID::Merc1];
+                                }
+                            }
+                            if (!match) {
+                                *out_text = HeroName[id];
+                            }
+                            return true;
+                        },
+                        nullptr, HeroIndexToID.size())) {
                         builds_changed = true;
                     }
                     ImGui::PopItemWidth();
@@ -520,7 +542,7 @@ void HeroBuildsWindow::HeroBuildName(const TeamHeroBuild& tbuild, const size_t i
     const std::string code(build.code);
     constexpr int buffer_size = 128;
     char buffer[buffer_size];
-    const auto id = idx > 0 && build.hero_index > 0 ? HeroIndexToID[build.hero_index] : 0;
+    const auto id = idx > 0 && build.hero_index > 0 ? HeroIndexToID.at(build.hero_index) : 0;
     if (name.empty() && code.empty() && id == HeroID::NoHero) {
         return; // nothing to do here
     }
@@ -609,11 +631,11 @@ void HeroBuildsWindow::Load(const TeamHeroBuild& tbuild, const size_t idx)
         }
     }
     else if (build.hero_index > 0) {
-        if (build.hero_index < 0 || build.hero_index >= hero_count) {
+        if (build.hero_index < 0 || build.hero_index >= static_cast<int>(HeroIndexToID.size())) {
             Log::Error("Bad hero index '%d' for build '%s'", build.hero_index, build.name);
             return;
         }
-        HeroID heroid = HeroIndexToID[build.hero_index];
+        HeroID heroid = HeroIndexToID.at(build.hero_index);
 
         if (heroid == HeroID::NoHero) {
             return;
@@ -685,7 +707,7 @@ void HeroBuildsWindow::Update(float)
     last_instance_type = instance_type;
 }
 
-void HeroBuildsWindow::CmdHeroTeamBuild(const wchar_t*, const int argc, const LPWSTR* argv)
+void CHAT_CMD_FUNC(HeroBuildsWindow::CmdHeroTeamBuild)
 {
     if (argc < 2) {
         Log::ErrorW(L"Syntax: /%s [hero_build_name]", argv[0]);
@@ -744,10 +766,9 @@ void HeroBuildsWindow::LoadFromFile()
 
         TeamHeroBuild tb(inifile->GetValue(section, "buildname", ""));
         tb.mode = inifile->GetLongValue(section, "mode", false);
-        tb.builds.reserve(8);
 
-        constexpr size_t buffer_size = 16;
         for (auto i = 0; i < 8; i++) {
+            constexpr size_t buffer_size = 16;
             char namekey[buffer_size];
             char templatekey[buffer_size];
             char heroindexkey[buffer_size];
@@ -766,8 +787,8 @@ void HeroBuildsWindow::LoadFromFile()
             }
             const auto show_panel = inifile->GetLongValue(section, showpanelkey, 0);
             const uint32_t behavior = static_cast<uint32_t>(inifile->GetLongValue(section, behaviorkey, 1));
-            HeroBuild build(nameval, templateval, hero_index, show_panel == 1 ? 1 : 0, behavior);
-            tb.builds.push_back(build);
+            const HeroBuild build(nameval, templateval, hero_index, show_panel == 1 ? 1 : 0, behavior);
+            tb.builds[i] = build;
         }
 
         // Check the binary to see if we should instead take the ptr to read everything to avoid the copy

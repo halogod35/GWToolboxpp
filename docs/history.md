@@ -7,6 +7,71 @@ layout: default
 Previous releases are available on Github as dll files. There is no support for older releases. If you are looking for
 the latest version, go to the [Home Page](./) instead.
 
+## Version 6.22
+* [Minor] Changed UI layout of travel window
+* [Minor] /tp [zm, zv, zb] now does the same as /zm take or /zm travel
+* [New] Added highlight info and right click menu to daily quests window to make doing dailies easier
+* [New] Added option to hide gw compass when toolbox minimap is active
+* [Fix] Fixed compass being hidden when toolbox starts
+* [Fix] Fixed alcohol being spammed too much
+* [Fix] Fixed rounding issues for SkillMonitor width causing wrong pixel offsets
+* [Fix] Fixed crash when offering an item to trade that is already already offered
+
+## Version 6.21
+* [Fix] Party widgets do not disappear when party members are out of compass range
+* [Fix] Minimap does not disappear when spectating
+* [Fix] /deposit works with model ids now
+* [Fix] open chest hotkey now works (still, prefer using the setting to automatically open locked chests in GameSettings)
+* [Fix] fixes update mode showing as unticked if you selected "never update"
+* [Removed] open locked chest hotkeys. Use the "automatically open chests with keys (or lockpicks)" in GameSettings instead.
+* [New] Added /wanted take, /zb take, /zm take, /zc take, /zv take to take Zaishen/daily quests and travel to the next quest outpost
+* [New] Added salvage info and nicholas info to item
+* [New] Added option to hide gw compass flagging controls
+* [New] Automatically send a party invite when a party search invite is sent
+
+## Version 6.20
+* [Minor] Added warning message when rerolling to a character that is currently in a map that toolbox won't work in e.g. guild hall
+* [Minor] `/tb load` now dynamically enables/disables modules when run
+* [Minor] Fixed some layout errors when Party damage widget is snapped to the in-game UI.
+* [Minor] Fixed some layout errors when Skill monitor widget is snapped to the in-game UI.
+* [Minor] Fixed some layout errors when Bond monitor damage is snapped to the in-game UI.
+* [Minor] Fixed some layout errors when Effect monitor is snapped to the in-game UI.
+* [Minor] Force Party damage/skill/bond/effect monitor snapped to in-game UI.
+* [Minor] Added option to turn the whisper redirect feature of the friend list window module off.
+* [Minor] Added missing deldrimor paragon armor to armory module
+* [Minor] Added option to exclude nicholas items from bulk salvage
+* [Minor] Updated `/deposit` command to allow more options; see chat commands section in help.
+* [New] Added nicholas info when hovering an applicable item
+* [New] Added option to bypass item quantity selection when dropping/moving/trading items (hold shift to prompt when enabled)
+* [New] Added ability to create a Hero build template from current setup via the Hero build window
+* [New] Added `/call` command to ping current target
+* [Fix] Fixed toolbox not loading up on first run due to missing fonts
+* [Fix] Fixed hotkeys being triggered by typing keys before map change
+* [Fix] Fixed crash caused by triggering hotkeys just before map change
+* [Fix] Fixed bugs related to the whisper redirect feature of the friend list window module.
+* [Fix] Fixed bug causing layout errors for snapped UI widgets when screen is small.
+* [Fix] Fixed spammy errors caused by issues fetching salvage info for hovered items
+* [Fix] Fixed crash caused by spectating heroes when you're dead
+* [Fix] Fixed bug causing items offered in trade to be removed when hovering
+* [Fix] Fixed crash when trading with "hide item descriptions" enabled
+
+## Version 6.18
+* [Removed] Toolbox no longer works in Guild Halls. This is intentional.
+* [New] Salvage information module added
+* [Minor] TravelWindow: Renamed minimize_on_travel to collapse_on_travel, default false
+* [Minor] Toolbox now respects fetch_salvage_info checkbox
+* [Minor] Removed outdated move_to_cast help
+* [Fix] Show All Areas (world map widget) no longer disables guild/ally chat buttons
+* [Fix] replying to Twitch (TwitchModule) correctly sends to twitch chat now
+* [Fix] Fixed option to flash gw window when player is pinged
+* [Fix] Fixed show notification/flash window on invite not saving
+* [Fix] Fixed crash when trying to withdraw to character without unlocked bags
+* [Fix] ChatFilter blocking ally drops no longer blocks drop messages for the player
+* [Fix] Fixed bug preventing URLs being sent as templates in whispers
+* [Fix] Fixed bug causing "I'm following X" messages from ignored players to still be shown
+* [Fix] Fixed bug preventing `/offline` chat command from working
+* [Fix] Fixed bug showing the wrong points for devotion in the completion window
+
 ## Version 6.17
 * [New] Added a release channel option to the toolbox updating functionality
 * [New] Draw all quests option (Minimap) now offers to draw non-active quests in a different colour

@@ -145,7 +145,7 @@ namespace {
 
     // ReSharper disable once CppParameterMayBeConst
     // ReSharper disable once CppParameterMayBeConstPtrOrRef
-    void OnToastMessageDecoded(void* callback_param, wchar_t* decoded)
+    void OnToastMessageDecoded(void* callback_param, const wchar_t* decoded)
     {
         const auto title = static_cast<wchar_t*>(callback_param);
         ToastNotifications::SendToast(title, decoded, OnGenericToastActivated);
@@ -260,7 +260,7 @@ namespace {
             return;
         }
         const auto packet = static_cast<GW::Packet::StoC::AgentState*>(base);
-        const GW::AgentLiving* current_character = GW::Agents::GetCharacter();
+        const GW::AgentLiving* current_character = GW::Agents::GetControlledCharacter();
         if (!packet || !current_character) {
             return;
         }
@@ -339,9 +339,9 @@ void ToastNotifications::Toast::toastDismissed(WinToastDismissalReason) const
     TriggerToastCallback(this, false);
 };
 
-void ToastNotifications::Toast::toastFailed() const
+void ToastNotifications::Toast::toastFailed(HRESULT err) const
 {
-    Log::Error("Failed to show toast");
+    Log::Error("Failed to show toast, error code %d",err);
     TriggerToastCallback(this, false);
 }
 
@@ -550,6 +550,7 @@ void ToastNotifications::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(show_notifications_on_whisper);
     SAVE_BOOL(show_notifications_on_guild_chat);
     SAVE_BOOL(show_notifications_on_ally_chat);
+    SAVE_BOOL(show_notifications_on_invite);
     SAVE_BOOL(show_notifications_on_last_to_ready);
     SAVE_BOOL(show_notifications_on_everyone_ready);
     SAVE_BOOL(show_notifications_on_self_resurrected);
@@ -557,6 +558,7 @@ void ToastNotifications::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(flash_window_on_whisper);
     SAVE_BOOL(flash_window_on_guild_chat);
     SAVE_BOOL(flash_window_on_ally_chat);
+    SAVE_BOOL(flash_window_on_invite);
     SAVE_BOOL(flash_window_on_last_to_ready);
     SAVE_BOOL(flash_window_on_everyone_ready);
     SAVE_BOOL(flash_window_on_self_resurrected);

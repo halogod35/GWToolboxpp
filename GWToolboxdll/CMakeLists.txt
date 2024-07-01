@@ -4,6 +4,8 @@ file(GLOB SOURCES
     "*.h"
     "*.cpp"
     "GWToolbox.rc"
+    "Constants/*.h"
+    "Constants/*.cpp"
     "Modules/*.h"
     "Modules/*.cpp"
     "Utils/*.h"
@@ -12,13 +14,13 @@ file(GLOB SOURCES
     "Widgets/*.cpp"
     "Widgets/Minimap/*.h"
     "Widgets/Minimap/*.cpp"
-    "Windows/*.h"
+    "Windows/*.h" 
     "Windows/*.cpp"
     )
 
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}" FILES ${SOURCES})
 target_sources(GWToolboxdll PRIVATE ${SOURCES})
-
+ 
 target_precompile_headers(GWToolboxdll PRIVATE "stdafx.h")
 target_compile_definitions(GWToolboxdll PRIVATE "_USRDLL")
 
@@ -34,7 +36,7 @@ set_target_properties(GWToolboxdll PROPERTIES
 
 target_link_options(GWToolboxdll PRIVATE
     /WX /OPT:REF /OPT:ICF /SAFESEH:NO
-    $<$<NOT:$<CONFIG:Debug>>:/LTCG /INCREMENTAL:NO>
+    $<$<NOT:$<CONFIG:Debug>>:/INCREMENTAL:NO>
     $<$<CONFIG:Debug>:/IGNORE:4098 /OPT:NOREF /OPT:NOICF>
     $<$<CONFIG:RelWithDebInfo>:/OPT:NOICF>
     $<$<CONFIG:DEBUG>:/NODEFAULTLIB:LIBCMT>
@@ -65,6 +67,7 @@ target_link_libraries(GWToolboxdll PRIVATE
     IconFontCppHeaders
     nativefiledialog
     wintoast
+    wolfssl
 
     # libs:
     Dbghelp.lib # for MiniDump

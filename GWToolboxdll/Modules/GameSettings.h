@@ -4,6 +4,8 @@
 
 #include <GWCA/Utilities/Hook.h>
 
+#include <Modules/ItemDescriptionHandler.h>
+
 #include <Color.h>
 #include <ToolboxModule.h>
 
@@ -62,7 +64,6 @@ public:
     bool WndProc(UINT Message, WPARAM wParam, LPARAM lParam) override;
 
     // callback functions
-    static void OnGetItemDescription(const uint32_t item_id, const uint32_t flags, const uint32_t quantity, const uint32_t unk, wchar_t** name_out, wchar_t** description_out);
     static void OnPingWeaponSet(GW::HookStatus*, GW::UI::UIMessage, void*, void*);
     static void OnAgentLoopingAnimation(GW::HookStatus*, const GW::Packet::StoC::GenericValue*);
     static void OnAgentMarker(GW::HookStatus* status, GW::Packet::StoC::GenericValue* pak);
@@ -79,7 +80,6 @@ public:
     static void OnPlayerJoinInstance(GW::HookStatus*, GW::Packet::StoC::PlayerJoinInstance*);
     static void OnPartyInviteReceived(const GW::HookStatus*, const GW::Packet::StoC::PartyInviteReceived_Create*);
     void OnPartyPlayerJoined(const GW::HookStatus*, const GW::Packet::StoC::PartyPlayerAdd*);
-    static void OnLocalChatMessage(GW::HookStatus*, const GW::Packet::StoC::MessageLocal*);
     static void OnServerMessage(const GW::HookStatus*, GW::Packet::StoC::MessageServer*);
     void OnScreenShake(GW::HookStatus*, const void* packet) const;
     static void OnWriteChat(GW::HookStatus* status, GW::UI::UIMessage msgid, void* wParam, void*);

@@ -134,7 +134,7 @@ private:
     void Enqueue(Shape_e shape, const GW::MapProp* agent, float size, Color color);
     void Enqueue(Shape_e shape, const RenderPosition& pos, float size, Color color, Color modifier = 0);
 
-    std::vector<const CustomAgent*>* GetCustomAgentsToDraw(const GW::AgentLiving* agent);
+    std::vector<const CustomAgent*>* GetCustomAgentsToDraw(const GW::Agent* agent);
 
     D3DVertex* vertices = nullptr;    // vertices array
     unsigned int vertices_count = 0;  // count of vertices
@@ -156,6 +156,7 @@ private:
     Color color_neutral = 0;
     Color color_ally = 0;
     Color color_ally_npc = 0;
+    Color color_ally_npc_quest = 0;
     Color color_ally_spirit = 0;
     Color color_ally_minion = 0;
     Color color_ally_dead = 0;

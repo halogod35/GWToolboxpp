@@ -11,7 +11,6 @@
 #include <GWCA/GameEntities/Map.h>
 
 #include <GWCA/Managers/StoCMgr.h>
-#include <GWCA/Managers/CtoSMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/GameThreadMgr.h>
@@ -233,26 +232,13 @@ namespace {
             GW::StoC::RemoveCallback(1, &entry);
             return; // GWCA not ready yet
         }
-
-        StoCHandler_pt GWCA_StoCHandler_Func = test_handler.handler_func;
         GW::StoC::RemoveCallback(1, &entry);
 
         ASSERT(original_handler_func != test_handler.handler_func);
 
-        // Using GWCA_StoCHandler_Func, offset to find original callback array
-        gwca_original_functions = *(StoCHandler***)(((uintptr_t)GWCA_StoCHandler_Func) + 0x110);
-        ASSERT(gwca_original_functions && *gwca_original_functions);
-
-        StoCHandler* original_functions = *gwca_original_functions;
-
-        // Final sanity check; ensure the pointer for packet 1 is the same as what we grabbed from memory
-        ASSERT(original_functions[1].handler_func == original_handler_func);
-
         // Copy gs handler array; we're going to swap out m_buffer.
         memcpy(&game_server_handler, original_handler_arr, sizeof(*original_handler_arr));
 
-        // Redirect our handler array to pont to the originals
-        game_server_handler.m_buffer = original_functions;
 
         ignored_packets[12] = true;
         ignored_packets[13] = true;
@@ -826,7 +812,7 @@ void PacketLoggerWindow::Draw(IDirect3DDevice9*)
 void PacketLoggerWindow::Initialize()
 {
     ToolboxWindow::Initialize();
-    GW::GameThread::Enqueue([]() {
+    GW::GameThread::Enqueue([] {
         InitStoC();
         });
     if (logger_enabled) {
@@ -948,9 +934,6 @@ void PacketLoggerWindow::Disable()
     for (size_t i = 0; i < game_server_handler.size(); i++) {
         GW::StoC::RemoveCallback(i, &hook_entry);
     }
-    for (size_t i = 0; i < 180; i++) {
-        GW::CtoS::RemoveCallback(i, &hook_entry);
-    }
     logger_enabled = false;
 }
 void PacketLoggerWindow::Terminate() {
@@ -966,13 +949,6 @@ void PacketLoggerWindow::Enable()
             &hook_entry, i, [this](GW::HookStatus* status, GW::Packet::StoC::PacketBase* packet) -> void {
                 PacketHandler(status, packet);
             }, -0x9000
-        );
-    }
-    for (size_t i = 0; i < 180; i++) {
-        GW::CtoS::RegisterPacketCallback(
-            &hook_entry, i, [this](const GW::HookStatus* status, void* packet) -> void {
-                CtoSHandler(status, packet);
-            }
         );
     }
     logger_enabled = true;

@@ -8,6 +8,8 @@ namespace GW::Constants {
     enum class QuestID : uint32_t;
 }
 
+
+
 class DailyQuests : public ToolboxWindow {
     DailyQuests() = default;
     ~DailyQuests() override = default;
@@ -23,6 +25,7 @@ public:
     [[nodiscard]] const char* Icon() const override { return ICON_FA_CALENDAR_ALT; }
 
     void Initialize() override;
+    void Terminate() override;
     void LoadSettings(ToolboxIni* ini) override;
     void SaveSettings(ToolboxIni* ini) override;
     void DrawSettingsInternal() override;
@@ -31,47 +34,53 @@ public:
     void Update(float delta) override;
     void Draw(IDirect3DDevice9* pDevice) override;
 
-    static constexpr size_t zb_cnt = 66;
-    static constexpr size_t zm_cnt = 69;
-    static constexpr size_t zc_cnt = 28;
-    static constexpr size_t zv_cnt = 136;
-    static constexpr size_t ws_cnt = 21;
-    static constexpr size_t wbe_cnt = 9;
-    static constexpr size_t wbp_cnt = 6;
+public:
+    class QuestData {
+    protected:
+        GuiUtils::EncString* name_english = nullptr;
+        GuiUtils::EncString* name_translated = nullptr;
+        // Initialise encoded strings at runtime, allows us to code the daily quests arrays at compile time
+        virtual void Decode();
+    public:
+        const GW::Constants::MapID map_id;
+        std::wstring enc_name;
 
-private:
-    bool subscribed_zaishen_bounties[zb_cnt] = {false};
-    bool subscribed_zaishen_combats[zc_cnt] = {false};
-    bool subscribed_zaishen_missions[zm_cnt] = {false};
-    bool subscribed_zaishen_vanquishes[zv_cnt] = {false};
-    bool subscribed_wanted_quests[ws_cnt] = {false};
-    bool subscribed_weekly_bonus_pve[wbe_cnt] = {false};
-    bool subscribed_weekly_bonus_pvp[wbp_cnt] = {false};
+        QuestData(GW::Constants::MapID map_id = (GW::Constants::MapID)0, const wchar_t* enc_name = nullptr);
+        // Assert that encoded strings are nulled. Because QuestData structs are static, this destructor is not guaranteed to run!!
+        ~QuestData();
+        const char* GetMapName();
+        const std::string& GetRegionName();
+        const char* GetQuestName();
+        const std::wstring& GetWikiName();
+        virtual const GW::Constants::MapID GetQuestGiverOutpost();
 
-    bool show_zaishen_bounty_in_window = true;
-    bool show_zaishen_combat_in_window = true;
-    bool show_zaishen_missions_in_window = true;
-    bool show_zaishen_vanquishes_in_window = true;
-    bool show_wanted_quests_in_window = true;
-    bool show_nicholas_in_window = true;
-    bool show_weekly_bonus_pve_in_window = true;
-    bool show_weekly_bonus_pvp_in_window = true;
+        void Travel();
 
-    uint32_t subscriptions_lookahead_days = 7;
-
-    float text_width = 200.0f;
-    int daily_quest_window_count = 90;
-
-    static void CmdWeeklyBonus(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdWantedByShiningBlade(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdZaishenBounty(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdZaishenMission(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdZaishenCombat(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdZaishenVanquish(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdVanguard(const wchar_t* message, int argc, const LPWSTR* argv);
-    static void CmdNicholas(const wchar_t* message, int argc, const LPWSTR* argv);
-
-    class ZaishenMission {
-        ZaishenMission(GW::Constants::QuestID _quest_id, GW::Constants::MapID _map_id);
+        // Clear out any encoded strings to ensure any decoding errors are thrown within the lifecycle of the application
+        void Terminate();
     };
+
+    class NicholasCycleData : public QuestData {
+    protected:
+        void Decode() override;
+    public:
+        const int quantity;
+        NicholasCycleData(const wchar_t* enc_name, uint32_t quantity, GW::Constants::MapID map_id);
+    };
+
+    static QuestData* GetZaishenBounty(time_t unix = 0);
+    static QuestData* GetZaishenVanquish(time_t unix = 0);
+    static QuestData* GetZaishenMission(time_t unix = 0);
+    static QuestData* GetZaishenCombat(time_t unix = 0);
+    static NicholasCycleData* GetNicholasTheTraveller(time_t unix = 0);
+
+    static QuestData* GetNicholasSandford(time_t unix = 0);
+    static QuestData* GetVanguardQuest(time_t unix = 0);
+    static QuestData* GetWantedByShiningBlade(time_t unix = 0);
+
+    static QuestData* GetWeeklyPvEBonus(time_t unix = 0);
+    static QuestData* GetWeeklyPvPBonus(time_t unix = 0);
+
+    // Returns info about the nicholas item if the given item name matches
+    static NicholasCycleData* GetNicholasItemInfo(const wchar_t* item_name_encoded);
 };

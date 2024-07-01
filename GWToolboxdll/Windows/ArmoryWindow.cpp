@@ -128,7 +128,7 @@ namespace GWArmory {
 
     GW::Equipment* GetPlayerEquipment()
     {
-        const auto player = GW::Agents::GetPlayerAsAgentLiving();
+        const auto player = GW::Agents::GetControlledCharacter();
         return player && player->equip && *player->equip ? *player->equip : nullptr;
     }
 
@@ -469,7 +469,7 @@ namespace GWArmory {
     }
 
     GW::Constants::Profession GetPlayerProfession() {
-        return GetAgentProfession(static_cast<GW::AgentLiving*>(GW::Agents::GetPlayer()));
+        return GetAgentProfession(GW::Agents::GetControlledCharacter());
     }
     bool IsCostumeFileId(uint32_t model_file_id) {
         return model_file_id && GetFileIdsForCostume(model_file_id) != nullptr;
@@ -677,7 +677,7 @@ namespace GWArmory {
     }
 
     bool GetIsFemale() {
-        const auto player = GW::Agents::GetPlayerAsAgentLiving();
+        const auto player = GW::Agents::GetControlledCharacter();
         return player && player->GetIsFemale();
     }
 
@@ -709,7 +709,6 @@ namespace GWArmory {
     }
 
     bool DrawArmorPieceNew(ItemSlot slot) {
-
         const auto state = &combo_list_states[slot];
         const auto player_piece = &gwarmory_window_pieces[slot];
         bool value_changed = false;
@@ -774,8 +773,34 @@ namespace GWArmory {
         ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0.f, 0.5f));
 
         ImGui::StartSpacedElements(icon_size.x);
+
+#ifdef _DEBUG
+        static Armor debug_piece("Debug Piece", 0, Profession::None, ItemType::Unknown, Campaign::Core, 0, 0);
+        if (ImGui::CollapsingHeader("Debug Item")) {
+            constexpr static std::array profession_names = {
+                "None", "Warrior", "Ranger", "Monk", "Necromancer", "Mesmer", "Elementalist", "Assassin", "Ritualist", "Paragon", "Dervish"
+            };
+            constexpr static std::array campaign_names = {
+                "Core", "Prophecies", "Factions", "Nightfall", "Eye of the North", "BonusMissionPack"
+            };
+            if (slot == Headpiece) {
+                ImGui::InputInt("model_file_id", (int*)&debug_piece.model_file_id);
+                ImGui::Combo("profession", (int*)&debug_piece.profession, profession_names.data(), profession_names.size());
+                ImGui::InputInt("type", (int*)&debug_piece.type);
+                ImGui::Combo("campaign", (int*)&debug_piece.campaign, campaign_names.data(), campaign_names.size());
+                ImGui::InputInt("dye_tint", (int*)&debug_piece.dye_tint);
+                ImGui::InputInt("interaction", (int*)&debug_piece.interaction);
+            }
+        }
+        std::vector<Armor*> pieces{};
+        if (slot == Headpiece && debug_piece.profession != Profession::None && debug_piece.interaction && debug_piece.model_file_id && debug_piece.type != ItemType::Unknown) {
+            pieces.push_back(&debug_piece);
+        }
+        pieces.append_range(state->pieces);
+        for (const auto& piece : pieces) {
+#else
         for (const auto& piece : state->pieces) {
-            
+#endif
             ImGui::PushID(piece);
 
             if (0 <= state->current_piece_index && static_cast<size_t>(state->current_piece_index) < state->pieces.size()) {
@@ -803,7 +828,6 @@ namespace GWArmory {
                 player_piece->dye.dye_tint = piece->dye_tint;
                 value_changed = true;
             }
-
 
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip(piece->label);

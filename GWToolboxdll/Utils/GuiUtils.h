@@ -36,6 +36,8 @@ namespace GuiUtils {
     void LoadFonts();
     std::string WikiUrl(const std::wstring& term);
     std::string WikiUrl(const std::string& term);
+    std::string WikiTemplateUrlFromTitle(const std::string& title);
+    std::string WikiTemplateUrlFromTitle(const std::wstring& title);
     void OpenWiki(const std::wstring& term);
     void SearchWiki(const std::wstring& term);
     bool FontsLoaded();
@@ -51,6 +53,7 @@ namespace GuiUtils {
     std::wstring ToSlug(std::wstring s);
     std::string ToLower(std::string s);
     std::wstring ToLower(std::wstring s);
+    std::wstring UrlEncode(const std::wstring& s, char space_token = '_');
     std::string UrlEncode(const std::string& s, char space_token = '_');
     std::string HtmlEncode(const std::string& s);
     std::wstring RemovePunctuation(std::wstring s);
@@ -144,7 +147,7 @@ namespace GuiUtils {
         bool sanitised = false;
         virtual void sanitise();
         GW::Constants::Language language_id = static_cast<GW::Constants::Language>(0xff);
-        static void OnStringDecoded(void* param, wchar_t* decoded);
+        static void OnStringDecoded(void* param, const wchar_t* decoded);
 
     public:
         // Set the language for decoding this encoded string. If the language has changed, resets the decoded result. Returns this for chaining.
@@ -152,10 +155,10 @@ namespace GuiUtils {
         bool IsDecoding() const { return decoding && decoded_ws.empty(); };
         // Recycle this EncString by passing a new encoded string id to decode.
         // Set sanitise to true to automatically remove guild tags etc from the string
-        void reset(uint32_t _enc_string_id = 0, bool sanitise = true);
+        EncString* reset(uint32_t _enc_string_id = 0, bool sanitise = true);
         // Recycle this EncString by passing a new string to decode.
         // Set sanitise to true to automatically remove guild tags etc from the string
-        void reset(const wchar_t* _enc_string = nullptr, bool sanitise = true);
+        EncString* reset(const wchar_t* _enc_string = nullptr, bool sanitise = true);
         std::wstring& wstring();
         std::string& string();
 

@@ -95,9 +95,15 @@ namespace {
         }
     }
 
+    bool IsFrameCreated(GW::UI::Frame* frame) {
+        return frame && frame->IsCreated();
+    }
     bool IsMapReady()
     {
-        return GW::Map::GetIsMapLoaded() && GW::Map::GetInstanceType() != GW::Constants::InstanceType::Loading && !GW::Map::GetIsObserving();
+        return GW::Map::GetIsMapLoaded() 
+            && GW::Map::GetInstanceType() != GW::Constants::InstanceType::Loading 
+            && !GW::Map::GetIsObserving()
+            && IsFrameCreated(GW::UI::GetFrameByLabel(L"Skillbar"));
     }
 
     // Repopulates applicable_hotkeys based on current character/map context.
@@ -166,7 +172,7 @@ namespace {
         if (!IsMapReady()) {
             return false;
         }
-        if (!GW::Agents::GetPlayerAsAgentLiving()) {
+        if (!GW::Agents::GetControlledCharacter()) {
             return false;
         }
         const GW::Constants::InstanceType mt = GW::Map::GetInstanceType();
@@ -198,7 +204,7 @@ namespace {
         if (!IsMapReady()) {
             return false;
         }
-        if (!GW::Agents::GetPlayerAsAgentLiving()) {
+        if (!GW::Agents::GetControlledCharacter()) {
             return false;
         }
         if (!CheckSetValidHotkeys()) {
@@ -560,7 +566,7 @@ void HotkeysWindow::SaveSettings(ToolboxIni* ini)
 bool HotkeysWindow::WndProc(const UINT Message, const WPARAM wParam, LPARAM)
 {
     if (Message == WM_ACTIVATE) {
-        OnWindowActivated(wParam != WA_INACTIVE);
+        OnWindowActivated(LOWORD(wParam) != WA_INACTIVE);
         return false;
     }
     if (GW::Chat::GetIsTyping()) {
@@ -669,6 +675,7 @@ void HotkeysWindow::Update(const float)
     if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Loading) {
         if (map_change_triggered) {
             map_change_triggered = false;
+            while (PopPendingHotkey()) {} // Clear any pending hotkeys from the last map
         }
         return;
     }

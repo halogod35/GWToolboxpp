@@ -3,6 +3,14 @@
 
 #include <ImGuiAddons.h>
 #include <string>
+#include <Keys.h>
+
+namespace {
+    ImGui::ImGuiContextMenuCallback imguiaddons_context_menu_callback = nullptr;
+    void* imguiaddons_context_menu_wparam = nullptr;
+    const char* imguiaddons_context_menu_id = "###imguiaddons_context_menu";
+    ImGui::ImGuiContextMenuCallback imguiaddons_context_menu_pending = nullptr;
+}
 
 namespace ImGui {
     float element_spacing_width = 0.f;
@@ -39,6 +47,27 @@ namespace ImGui {
         element_spacing_col_idx++;
     }
 
+    void SetContextMenu(ImGuiContextMenuCallback callback, void* wparam) {
+        imguiaddons_context_menu_pending = callback;
+        imguiaddons_context_menu_wparam = wparam;
+
+    }
+
+    void DrawContextMenu() {
+        if (imguiaddons_context_menu_pending) {
+            imguiaddons_context_menu_callback = imguiaddons_context_menu_pending;
+            imguiaddons_context_menu_pending = nullptr;
+            ImGui::OpenPopup(imguiaddons_context_menu_id);
+            return;
+        }
+        if (!ImGui::BeginPopup(imguiaddons_context_menu_id))
+            return;
+        if (!(imguiaddons_context_menu_callback && imguiaddons_context_menu_callback(imguiaddons_context_menu_wparam))) {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
 
     void ShowHelp(const char* help)
     {
@@ -52,8 +81,10 @@ namespace ImGui {
     void TextShadowed(const char* label, const ImVec2 offset, const ImVec4& shadow_color)
     {
         const ImVec2 pos = GetCursorPos();
+        ImGui::PushStyleColor(ImGuiCol_Text, shadow_color);
         SetCursorPos(ImVec2(pos.x + offset.x, pos.y + offset.y));
-        TextColored(shadow_color, "%s", label);
+        TextUnformatted(label);
+        ImGui::PopStyleColor();
         SetCursorPos(pos);
         TextUnformatted(label);
     }
@@ -62,6 +93,38 @@ namespace ImGui {
     {
         const auto& io = GetIO();
         SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), flags, ImVec2(0.5f, 0.5f));
+    }
+
+    bool ConfirmDialog(const char* message, bool* result)
+    {
+        bool res = false;
+        ImGui::OpenPopup("##confirm_popup");
+        if (ImGui::BeginPopupModal("##confirm_popup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            static bool was_enter_down = true, was_escape_down = true;
+            if (ImGui::IsWindowAppearing()) {
+                was_enter_down = ImGui::IsKeyDown(ImGuiKey_Enter);
+                was_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
+            }
+            bool is_enter_down = ImGui::IsKeyDown(ImGuiKey_Enter);
+            bool is_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
+            ImGui::TextUnformatted(message);
+
+            if (ImGui::Button("Yes", ImVec2(120, 0)) || (!was_enter_down && is_enter_down)) {
+                *result = true;
+                res = true;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("No", ImVec2(120, 0)) || (!was_escape_down && is_escape_down)) {
+                *result = false;
+                res = true;
+                ImGui::CloseCurrentPopup();
+            }
+            was_escape_down = is_escape_down;
+            was_enter_down = is_enter_down;
+            ImGui::EndPopup();
+        }
+        return res;
     }
 
     bool SmallConfirmButton(const char* label, bool* confirm_bool, const char* confirm_content)
@@ -86,6 +149,44 @@ namespace ImGui {
         return *confirm_bool;
     }
 
+    bool ChooseKey(const char* label, char* buf, size_t buf_len, long* output_key_code)
+    {
+        ImGui::InputText(label, buf, buf_len, ImGuiInputTextFlags_AlwaysOverwrite | ImGuiInputTextFlags_AutoSelectAll);
+        if (ImGui::IsItemFocused()) {
+            const auto keys = GetPressedKeys();
+            if (!keys.empty()) {
+                strncpy(buf, KeyName(keys[0]), buf_len);
+                *output_key_code = keys[0];
+            }
+            return true;
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton(ICON_FA_TIMES "##clearkeyinput")) {
+            strcpy(buf, "None");
+            *output_key_code = 0;
+            return true;
+        }
+        return false;
+    }
+
+    const std::vector<ImGuiKey>& GetPressedKeys()
+    {
+        static std::vector<ImGuiKey> pressedKeys;
+        static int frameCount = -1;
+
+        int newFrameCount = ImGui::GetFrameCount();
+        if (frameCount != newFrameCount) {
+            frameCount = newFrameCount;
+
+            pressedKeys.clear();
+            for (int key = ImGuiKey_NamedKey_BEGIN; key < ImGuiKey_NamedKey_END; ++key)
+                if (ImGui::IsKeyPressed((ImGuiKey)key))
+                    pressedKeys.push_back((ImGuiKey)key);
+        }
+
+        return pressedKeys;
+    }
+
     bool ConfirmButton(const char* label, bool* confirm_bool, const char* confirm_content)
     {
         static char id_buf[128];
@@ -107,6 +208,13 @@ namespace ImGui {
         }
         return *confirm_bool;
     }
+
+    void ClosePopup(const char* popup_id)
+    {
+        if (IsPopupOpen(popup_id))
+            ClosePopup(popup_id);
+    }
+
     bool CompositeIconButton(const char* label, const ImTextureID* icons, size_t icons_len, const ImVec2& size, const ImGuiButtonFlags flags, const ImVec2& icon_size, const ImVec2& uv0, ImVec2 uv1)
     {
         char button_id[128];
@@ -157,6 +265,7 @@ namespace ImGui {
         }
         return clicked;
     }
+
     bool IconButton(const char* label, const ImTextureID icon, const ImVec2& size, const ImGuiButtonFlags flags, const ImVec2& icon_size)
     {
         return CompositeIconButton(label, &icon, 1, size, flags, icon_size);
@@ -307,8 +416,10 @@ namespace ImGui {
         }
         return uv1;
     }
+
     // Given a texture, sprite size in px and the offset of the sprite we want, fill out uv0 and uv1 coords for percentage offsets. False on failure.
-    bool GetSpriteUvCoords(const ImTextureID user_texture_id, const ImVec2& single_sprite_size, uint32_t sprite_offset[2], ImVec2* uv0_out, ImVec2* uv1_out) {
+    bool GetSpriteUvCoords(const ImTextureID user_texture_id, const ImVec2& single_sprite_size, uint32_t sprite_offset[2], ImVec2* uv0_out, ImVec2* uv1_out)
+    {
         if (!user_texture_id)
             return false;
         const auto texture = static_cast<IDirect3DTexture9*>(user_texture_id);
@@ -318,14 +429,14 @@ namespace ImGui {
             return false; // Don't throw anything into the log here; this function is called every frame by modules that use it!
         }
 
-        ImVec2 img_dimensions = { static_cast<float>(desc.Width), static_cast<float>(desc.Height) };
+        ImVec2 img_dimensions = {static_cast<float>(desc.Width), static_cast<float>(desc.Height)};
 
-        ImVec2 start_px_offset = { single_sprite_size.x * sprite_offset[0], single_sprite_size.y * sprite_offset[1] };
+        ImVec2 start_px_offset = {single_sprite_size.x * sprite_offset[0], single_sprite_size.y * sprite_offset[1]};
         if (start_px_offset.x >= img_dimensions.x
             || start_px_offset.y >= img_dimensions.y) {
             return false;
         }
-        ImVec2 end_px_offset = { start_px_offset.x + single_sprite_size.x, start_px_offset.y + single_sprite_size.y };
+        ImVec2 end_px_offset = {start_px_offset.x + single_sprite_size.x, start_px_offset.y + single_sprite_size.y};
         if (end_px_offset.x >= img_dimensions.x
             || end_px_offset.y >= img_dimensions.y) {
             return false;
@@ -341,6 +452,12 @@ namespace ImGui {
     void ImageCropped(const ImTextureID user_texture_id, const ImVec2& size)
     {
         Image(user_texture_id, size, {0, 0}, CalculateUvCrop(user_texture_id, size));
+    }
+
+    bool IsMouseInRect(const ImVec2& top_left, const ImVec2& bottom_right)
+    {
+        const ImRect rect(top_left, bottom_right);
+        return rect.Contains(GetIO().MousePos);
     }
 
     void AddImageCropped(const ImTextureID user_texture_id, const ImVec2& top_left, const ImVec2& bottom_right)
@@ -380,5 +497,77 @@ namespace ImGui {
         EndGroup();
         PopID();
         return value_changed;
+    }
+
+    // Store original positions of the windows
+    std::unordered_map<std::string_view, ImVec2> original_positions;
+
+    void ClampWindowToScreen(ImGuiWindow* window)
+    {
+        ImVec2 window_pos = window->Pos;                        // Get the current window position
+        const ImVec2 window_size = window->Size;                // Get the current window size
+        const ImVec2 display_size = ImGui::GetIO().DisplaySize; // Get the display size
+        const std::string_view window_name = window->Name;      // Get the window name
+
+        // Check if the window position needs to be clamped based on the original position if available
+        const ImVec2 original_pos = original_positions.contains(window_name) ? original_positions[window_name] : window_pos;
+
+        // Determine if clamping is needed
+        const bool needs_clamping = original_pos.x + window_size.x > display_size.x ||
+                                    original_pos.y + window_size.y > display_size.y;
+
+        if (needs_clamping) {
+            // Save the original position if not already saved
+            if (!original_positions.contains(window_name)) {
+                original_positions[window_name] = window_pos;
+            }
+
+            // Clamp window position to ensure the entire content is on screen
+            if (window_pos.x + window_size.x > display_size.x) window_pos.x = display_size.x - window_size.x;
+            if (window_pos.y + window_size.y > display_size.y) window_pos.y = display_size.y - window_size.y;
+
+            // Set the new window position
+            ImGui::SetWindowPos(window, window_pos, ImGuiCond_Always);
+            if (window->Collapsed) {
+                original_positions[window_name] = window_pos;
+            }
+        }
+        else {
+            const bool is_moving_window = ImGui::GetIO().WantCaptureMouse && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            if (!is_moving_window && original_positions.contains(window_name)) {
+                const ImVec2& stored_pos = original_positions.at(window_name);
+                if (window_pos.x != stored_pos.x || window_pos.y != stored_pos.y) {
+                    ImGui::SetWindowPos(window, original_pos, ImGuiCond_Always);
+                    original_positions.erase(window_name);
+                }
+                else {
+                    original_positions[window_name] = window_pos;
+                }
+            }
+        }
+    }
+
+    void ClampAllWindowsToScreen(const bool clamp)
+    {
+        if (clamp) {
+            for (const auto window : ImGui::GetCurrentContext()->Windows) {
+                // if (window->Collapsed || !window->Active) continue;
+                ClampWindowToScreen(window);
+            }
+        }
+        else {
+            // restore positions and delete the original position if it's restored
+            for (auto it = original_positions.begin(); it != original_positions.end();) {
+                ImGui::SetWindowPos(it->first.data(), it->second, ImGuiCond_Always);
+                it = original_positions.erase(it);
+            }
+        }
+    }
+    bool ButtonWithHint(const char* label, const char* tooltip, const ImVec2& size_arg)
+    {
+        bool clicked = ButtonEx(label, size_arg, ImGuiButtonFlags_None);
+        if (IsItemHovered() && tooltip)
+            SetTooltip(tooltip);
+        return clicked;
     }
 }

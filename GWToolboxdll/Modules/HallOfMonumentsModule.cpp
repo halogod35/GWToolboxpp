@@ -251,6 +251,8 @@ bool HallOfMonumentsModule::DecodeHomCode(HallOfMonumentsAchievements* out)
 
     // Devotion
     it = &bitStr[192];
+    out->devotion_tally = 0;
+    memset(out->devotion_points, 0, sizeof(out->devotion_points));
     for (size_t i = 0; i < _countof(out->devotion_detail); i++) {
         out->devotion_detail[i] = static_cast<uint32_t>(_ReadBits(&it, 7));
         out->devotion_tally += out->devotion_detail[i];
@@ -314,7 +316,7 @@ void HallOfMonumentsModule::AsyncGetAccountAchievements(const std::wstring& char
             }
             return;
         }
-        const std::regex json_regex("legacy_bits\":\"([^\"]+)");
+        static const std::regex json_regex("legacy_bits\":\"([^\"]+)");
         std::smatch m;
         if (!std::regex_search(response, m, json_regex)) {
             Log::Log("Failed to find regex code from %s", response.c_str());

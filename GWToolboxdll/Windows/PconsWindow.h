@@ -52,9 +52,9 @@ public:
     static void OnSpeechBubble(GW::HookStatus* status, const GW::Packet::StoC::SpeechBubble* pak);
     static void OnAgentState(GW::HookStatus*, GW::Packet::StoC::AgentState* pak);
     static void OnGenericValue(GW::HookStatus*, GW::Packet::StoC::GenericValue* pak);
-    static void OnPostProcessEffect(GW::HookStatus* status, const GW::Packet::StoC::PostProcess* pak);
+    static void OnPostProcessEffect(GW::HookStatus* status, GW::Packet::StoC::PostProcess* pak);
     static void OnAddExternalBond(GW::HookStatus* status, const GW::Packet::StoC::AddExternalBond* pak);
-    static void CmdPcons(const wchar_t*, int argc, const LPWSTR* argv);
+    static void CHAT_CMD_FUNC(CmdPcons);
 
     std::vector<Pcon*> pcons{};
 
