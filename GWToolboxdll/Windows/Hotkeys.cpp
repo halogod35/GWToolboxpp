@@ -30,7 +30,7 @@
 #include <Windows/HeroBuildsWindow.h>
 #include <Windows/Hotkeys.h>
 #include <Windows/PconsWindow.h>
-
+#include <Utils/TextUtils.h>
 
 bool TBHotkey::show_active_in_header = true;
 bool TBHotkey::show_run_in_header = true;
@@ -380,7 +380,7 @@ bool TBHotkey::Draw(Op* op)
     ASSERT(ModKeyName(keybuf, _countof(keybuf), modifier, hotkey, "<None>") != -1);
     ASSERT(snprintf(&header[written], _countof(header) - written, " [%s]###header%u", keybuf, ui_id) != -1);
     const ImGuiTreeNodeFlags flags = show_active_in_header || show_run_in_header
-                                         ? ImGuiTreeNodeFlags_AllowItemOverlap
+                                         ? ImGuiTreeNodeFlags_AllowOverlap
                                          : 0;
     if (!ImGui::CollapsingHeader(header, flags)) {
         ShowHeaderButtons();
@@ -462,7 +462,7 @@ bool TBHotkey::Draw(Op* op)
             if (add_map_id) {
                 uint32_t map_id_out;
                 if (strlen(map_id_input_buf)
-                    && GuiUtils::ParseUInt(map_id_input_buf, &map_id_out)
+                    && TextUtils::ParseUInt(map_id_input_buf, &map_id_out)
                     && !std::ranges::contains(map_ids, reinterpret_cast<uint32_t>(map_id_input_buf))) {
                     map_ids.push_back(map_id_out);
                     memset(map_id_input_buf, 0, sizeof(map_id_input_buf));
@@ -520,13 +520,13 @@ bool TBHotkey::Draw(Op* op)
             ImGui::Text("Press key");
             DWORD newmod = 0;
             if (mod_out) {
-                if (ImGui::IsKeyDown(ImGuiKey_ModCtrl)) {
+                if (ImGui::IsKeyDown(ImGuiMod_Ctrl)) {
                     newmod |= ModKey_Control;
                 }
-                if (ImGui::IsKeyDown(ImGuiKey_ModShift)) {
+                if (ImGui::IsKeyDown(ImGuiMod_Shift)) {
                     newmod |= ModKey_Shift;
                 }
-                if (ImGui::IsKeyDown(ImGuiKey_ModAlt)) {
+                if (ImGui::IsKeyDown(ImGuiMod_Alt)) {
                     newmod |= ModKey_Alt;
                 }
             }
@@ -762,7 +762,7 @@ void HotkeySendChat::Execute()
         return;
     }
     if (show_message_in_emote_channel && channel == L'/') {
-        Log::Info("/%s", message);
+        Log::Flash("/%s", message);
     }
     GW::Chat::SendChat(channel, message);
 }
@@ -1311,24 +1311,19 @@ void HotkeyDropUseBuff::Execute()
     }
 }
 
-bool HotkeyToggle::GetText(void*, int idx, const char** out_text)
+const char* HotkeyToggle::GetText(void*, int idx)
 {
     switch (static_cast<ToggleTarget>(idx)) {
         case Clicker:
-            *out_text = "Clicker";
-            return true;
+           return "Clicker";
         case Pcons:
-            *out_text = "Pcons";
-            return true;
+            return "Pcons";
         case CoinDrop:
-            *out_text = "Coin Drop";
-            return true;
+            return "Coin Drop";
         case Tick:
-            *out_text = "Tick";
-            return true;
-        default:
-            return false;
+            return "Tick";
     }
+    return nullptr;
 }
 
 bool HotkeyToggle::IsValid(const ToolboxIni* ini, const char* section)
@@ -1348,7 +1343,7 @@ HotkeyToggle::HotkeyToggle(const ToolboxIni* ini, const char* section)
     initialised = true;
     switch (target) {
         case Clicker:
-            interval = 7;
+            interval = clicker_delay_ms;
             break;
         case CoinDrop:
             interval = 500;
@@ -1364,8 +1359,7 @@ void HotkeyToggle::Save(ToolboxIni* ini, const char* section) const
 
 int HotkeyToggle::Description(char* buf, const size_t bufsz)
 {
-    const char* name{};
-    GetText(nullptr, target, &name);
+    const char* name = GetText(nullptr, target);
     return snprintf(buf, bufsz, "Toggle %s", name);
 }
 
@@ -1400,10 +1394,10 @@ void HotkeyToggle::Toggle()
     if (ongoing || (!ongoing && !toggled[togglekey])) {
         switch (target) {
             case Clicker:
-                Log::Info("Clicker is %s", ongoing ? "active" : "disabled");
+                Log::Flash("Clicker is %s", ongoing ? "active" : "disabled");
                 break;
             case CoinDrop:
-                Log::Info("Coindrop is %s", ongoing ? "active" : "disabled");
+                Log::Flash("Coindrop is %s", ongoing ? "active" : "disabled");
                 break;
         }
     }
@@ -1430,7 +1424,13 @@ void HotkeyToggle::Execute()
         if (!ongoing) {
             Toggle();
         }
+        if (target == Clicker) {
+            interval = clicker_delay_ms;
+        }
         if (TIMER_DIFF(last_use) < interval) {
+            return;
+        }
+        if (processing) {
             return;
         }
         if (!IsToggled(true)) {
@@ -1446,6 +1446,7 @@ void HotkeyToggle::Execute()
             memset(&input, 0, sizeof(INPUT));
             input.type = INPUT_MOUSE;
             input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_LEFTUP;
+            processing = true;
             SendInput(1, &input, sizeof(INPUT));
             break;
         case Pcons:
@@ -1469,24 +1470,19 @@ void HotkeyToggle::Execute()
     last_use = TIMER_INIT();
 }
 
-bool HotkeyAction::GetText(void*, int idx, const char** out_text)
+const char* HotkeyAction::GetText(void*, int idx)
 {
     switch (static_cast<Action>(idx)) {
         case OpenXunlaiChest:
-            *out_text = "Open Xunlai Chest";
-            return true;
+            return "Open Xunlai Chest";
         case DropGoldCoin:
-            *out_text = "Drop Gold Coin";
-            return true;
+            return "Drop Gold Coin";
         case ReapplyTitle:
-            *out_text = "Reapply appropriate Title";
-            return true;
+            return "Reapply appropriate Title";
         case EnterChallenge:
-            *out_text = "Enter Challenge";
-            return true;
-        default:
-            return false;
+            return "Enter Challenge";
     }
+    return nullptr;
 }
 
 HotkeyAction::HotkeyAction(const ToolboxIni* ini, const char* section)
@@ -1503,9 +1499,8 @@ void HotkeyAction::Save(ToolboxIni* ini, const char* section) const
 
 int HotkeyAction::Description(char* buf, const size_t bufsz)
 {
-    const char* name{};
-    GetText(nullptr, action, &name);
-    return snprintf(buf, bufsz, "%s", name);
+    const char* name = GetText(nullptr, action);
+    return snprintf(buf, bufsz, "%s", name ? name : "Unknown");
 }
 
 bool HotkeyAction::Draw()
@@ -1629,7 +1624,7 @@ void HotkeyTarget::Execute()
     if (show_message_in_emote_channel) {
         char buf[256];
         Description(buf, 256);
-        Log::Info("Triggered %s", buf);
+        Log::Flash("Triggered %s", buf);
     }
 }
 
@@ -1725,12 +1720,12 @@ void HotkeyMove::Execute()
     GW::Agents::Move(location.x, location.y);
     if (name[0] == '\0') {
         if (show_message_in_emote_channel) {
-            Log::Info("Moving to (%.0f, %.0f)", x, y);
+            Log::Flash("Moving to (%.0f, %.0f)", x, y);
         }
     }
     else {
         if (show_message_in_emote_channel) {
-            Log::Info("Moving to %s", name);
+            Log::Flash("Moving to %s", name);
         }
     }
 }
@@ -1781,17 +1776,16 @@ void HotkeyDialog::Execute()
 
     GW::Chat::SendChat('/', buf);
     if (show_message_in_emote_channel) {
-        Log::Info("Sent dialog %s (%d)", name, id);
+        Log::Flash("Sent dialog %s (%d)", name, id);
     }
 }
 
-bool HotkeyPingBuild::GetText(void*, const int idx, const char** out_text)
+const char* HotkeyPingBuild::GetText(void*, const int idx)
 {
     if (idx >= static_cast<int>(BuildsWindow::Instance().BuildCount())) {
-        return false;
+        return nullptr;
     }
-    *out_text = BuildsWindow::Instance().BuildName(static_cast<size_t>(idx));
-    return true;
+    return BuildsWindow::Instance().BuildName(static_cast<size_t>(idx));
 }
 
 HotkeyPingBuild::HotkeyPingBuild(const ToolboxIni* ini, const char* section)
@@ -1835,14 +1829,12 @@ void HotkeyPingBuild::Execute()
     BuildsWindow::Instance().Send(index);
 }
 
-bool HotkeyHeroTeamBuild::GetText(void*, const int idx, const char** out_text)
+const char* HotkeyHeroTeamBuild::GetText(void*, const int idx)
 {
     if (idx >= static_cast<int>(HeroBuildsWindow::Instance().BuildCount())) {
-        return false;
+        return nullptr;
     }
-    const size_t index = static_cast<size_t>(idx);
-    *out_text = HeroBuildsWindow::Instance().BuildName(index);
-    return true;
+    return HeroBuildsWindow::Instance().BuildName(static_cast<size_t>(idx));
 }
 
 HotkeyHeroTeamBuild::HotkeyHeroTeamBuild(const ToolboxIni* ini, const char* section)

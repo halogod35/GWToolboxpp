@@ -1,4 +1,5 @@
 #pragma once
+#include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 
 class StoCCallback {
@@ -25,7 +26,11 @@ public:
     }
 };
 
+struct ImRect;
+
 namespace GW {
+    struct MapProp;
+    struct AreaInfo;
     struct Player;
     struct Agent;
     struct AgentLiving;
@@ -48,6 +53,72 @@ namespace GW {
 
     namespace Packet::StoC {
         struct PacketBase;
+    }
+    typedef Array<PlayerPartyMember> PlayerPartyMemberArray;
+    struct AvailableCharacterInfo {
+        /* + h0000 */
+        uint32_t h0000[2];
+        /* + h0008 */
+        uint32_t uuid[4];
+        /* + h0018 */
+        wchar_t player_name[20];
+        /* + h0040 */
+        uint32_t props[17];
+
+        GW::Constants::MapID map_id() const
+        {
+            return static_cast<GW::Constants::MapID>((props[0] >> 16) & 0xffff);
+        }
+
+        uint32_t primary() const
+        {
+            return ((props[2] >> 20) & 0xf);
+        }
+        uint32_t secondary() const
+        {
+            return ((props[7] >> 10) & 0xf);
+        }
+
+        uint32_t campaign() const
+        {
+            return (props[7] & 0xf);
+        }
+
+        uint32_t level() const
+        {
+            return ((props[7] >> 4)  & 0x3f);
+        }
+
+        bool is_pvp() const
+        {
+            return ((props[7] >> 9) & 0x1) == 0x1;
+        }
+    };
+    static_assert(sizeof(AvailableCharacterInfo) == 0x84);
+
+}
+namespace GW {
+    typedef void(__cdecl* OnGotFrame_Callback)(UI::Frame*);
+    void WaitForFrame(const wchar_t* frame_label, OnGotFrame_Callback callback);
+    namespace Map {
+        GW::Array<GW::MapProp*>* GetMapProps();
+        bool GetMapWorldMapBounds(GW::AreaInfo* map, ImRect* out);
+    }
+    namespace PartyMgr {
+        GW::PlayerPartyMemberArray* GetPartyPlayers(uint32_t party_id = 0);
+        size_t GetPlayerPartyIndex(uint32_t player_number, uint32_t party_id = 0);
+    }
+    namespace AccountMgr {
+        // Return pointer to array containing list of playable characters from character select screen.
+        GW::Array<AvailableCharacterInfo>* GetAvailableChars();
+
+        const wchar_t* GetCurrentPlayerName();
+
+        // Try not to be a dick with this info
+        const wchar_t* GetAccountEmail();
+        const UUID* GetPortalAccountUuid();
+
+        AvailableCharacterInfo* GetAvailableCharacter(const wchar_t* name);
     }
 }
 

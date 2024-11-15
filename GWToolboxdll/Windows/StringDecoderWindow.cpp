@@ -10,6 +10,7 @@
 #include <Utils/GuiUtils.h>
 
 #include <Windows/StringDecoderWindow.h>
+#include <Utils/TextUtils.h>
 
 namespace {
     void printchar(const wchar_t c)
@@ -77,11 +78,11 @@ void StringDecoderWindow::Draw(IDirect3DDevice9*)
         }
     }
     if (!decoded.empty()) {
-        // std::wstring str = GuiUtils::StringToWString(encoded);
+        // std::wstring str = TextUtils::StringToWString(encoded);
         /*Log::LogW(L"%d %ls\n",
                   GW::UI::EncStrToUInt32(GetEncodedString().c_str()),
                   decoded.c_str());*/
-        WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, decoded.c_str());
+        WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, decoded.c_str(), nullptr, true);
         //PrintEncStr(GetEncodedString().c_str());
         decoded.clear();
     }
@@ -115,7 +116,7 @@ std::wstring StringDecoderWindow::GetEncodedString() const
         //Log::Log("%s\n", results[i].c_str());
         unsigned int lval = 0;
         const auto base = results[i].rfind("0x", 0) == 0 ? 0 : 16;
-        if (!(GuiUtils::ParseUInt(results[i].c_str(), &lval, base) && lval < 0xffff)) {
+        if (!(TextUtils::ParseUInt(results[i].c_str(), &lval, base) && lval < 0xffff)) {
             Log::Error("Failed to ParseUInt %s", results[i].c_str());
             return L"";
         }

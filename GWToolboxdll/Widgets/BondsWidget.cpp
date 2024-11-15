@@ -93,6 +93,8 @@ namespace {
     // Distance away from the party window on the x axis; used with snap to party window
     int user_offset = 64;
 
+    bool overlay_party_window = false;
+
     Color background = 0;
     Color low_attribute_overlay = 0;
 
@@ -229,7 +231,7 @@ namespace {
         // Party member (or all)
         if (wcscmp(argv[2], L"all") != 0) {
             uint32_t party_member_idx = 0;
-            if (!GuiUtils::ParseUInt(argv[2], &party_member_idx)) {
+            if (!TextUtils::ParseUInt(argv[2], &party_member_idx)) {
                 syntax_err();
                 return;
             }
@@ -240,7 +242,7 @@ namespace {
         }
         // Skill
         if (wcscmp(argv[3], L"all") != 0) {
-            if (!GuiUtils::ParseUInt(argv[3], &skill_id)) {
+            if (!TextUtils::ParseUInt(argv[3], &skill_id)) {
                 syntax_err();
                 return;
             }
@@ -362,12 +364,21 @@ void BondsWidget::Draw(IDirect3DDevice9*)
     const float width = bond_list.size() * img_width;
 
     const auto user_offset_x = abs(static_cast<float>(user_offset));
-    float window_x = party_health_bars_position.top_left.x - user_offset_x - width;
-    if (window_x < 0 || user_offset < 0) {
-        // Right placement
-        window_x = party_health_bars_position.bottom_right.x + user_offset_x;
-    }
+    float window_x = .0f;
+    if (overlay_party_window) {
+        window_x = party_health_bars_position.top_left.x + user_offset_x;
+        if (user_offset < 0) {
+            window_x = party_health_bars_position.bottom_right.x - user_offset_x - width;
+        }
 
+    }
+    else {
+        window_x = party_health_bars_position.top_left.x - user_offset_x - width;
+        if (window_x < 0 || user_offset < 0) {
+            // Right placement
+            window_x = party_health_bars_position.bottom_right.x + user_offset_x;
+        }
+    }
     // Add a window to capture mouse clicks.
     ImGui::SetNextWindowPos({ window_x,party_health_bars_position.top_left.y });
     ImGui::SetNextWindowSize({ width, party_health_bars_position.bottom_right.y - party_health_bars_position.top_left.y });
@@ -409,13 +420,14 @@ void BondsWidget::Draw(IDirect3DDevice9*)
                 for (const GW::Effect& effect : agent_effects) {
                     const auto skill_id = static_cast<GW::Constants::SkillID>(effect.skill_id);
 
-                    if (!DrawBondImage(agent_id, skill_id, &bond_top_left, &bond_bottom_right))
-                        continue;
-
                     const GW::Skill* skill_data = GW::SkillbarMgr::GetSkillConstantData(skill_id);
                     if (!skill_data || skill_data->duration0 == 0x20000) {
                         continue; // Maintained skill/enchantment
                     }
+
+                    if (!DrawBondImage(agent_id, skill_id, &bond_top_left, &bond_bottom_right))
+                        continue;
+
                     const GW::Attribute* agentAttributes = GW::PartyMgr::GetAgentAttributes(agent_id);
                     ASSERT(agentAttributes);
                     agentAttributes = &agentAttributes[static_cast<size_t>(skill_data->attribute)];
@@ -462,6 +474,7 @@ void BondsWidget::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(flip_bonds);
     LOAD_BOOL(hide_in_outpost);
     LOAD_UINT(user_offset);
+    LOAD_BOOL(overlay_party_window);
 
     for (auto& b : available_bonds) {
         char buf[128];
@@ -482,6 +495,7 @@ void BondsWidget::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(flip_bonds);
     SAVE_BOOL(hide_in_outpost);
     SAVE_UINT(user_offset);
+    SAVE_BOOL(overlay_party_window);
 
     for (const auto& b : available_bonds) {
         char buf[128];
@@ -498,8 +512,13 @@ void BondsWidget::DrawSettingsInternal()
     if (bond_list.empty()) {
         ImGui::TextColored(ImVec4(0xFF, 0, 0, 0xFF), "Equip a maintainable enchantment or refrain to show bonds widget on-screen");
     }
-    ImGui::InputInt("Party window offset", &user_offset);
-    ImGui::ShowHelp("Distance away from the party window");
+    ImGui::StartSpacedElements(292.f);
+    ImGui::NextSpacedElement();
+    ImGui::Checkbox("Show on top of health bars", &overlay_party_window);
+    ImGui::ShowHelp("Untick to show this widget to the left (or right) of the party window.\nTick to show this widget over the top of the party health bars inside the party window");
+    ImGui::NextSpacedElement();
+    ImGui::PushItemWidth(120.f);
+    ImGui::DragInt("Party window offset", &user_offset);
     ImGui::TextUnformatted("Skills enabled for bond monitor:");
     ImGui::Indent();
     ImGui::StartSpacedElements(180.f);

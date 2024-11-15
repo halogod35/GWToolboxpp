@@ -5,11 +5,11 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 
 #include <Logger.h>
-#include <Utils/GuiUtils.h>
 
 #include <Modules/CrashHandler.h>
 // ReSharper disable once CppUnusedIncludeDirective
 #include <Modules/Resources.h>
+#include <Utils/TextUtils.h>
 
 namespace {
     FILE* logfile = nullptr;
@@ -23,6 +23,8 @@ namespace {
     };
 
     [[maybe_unused]] bool crash_dumped = false;
+
+    bool log_transient = false;
 }
 
 static void GWCALogHandler(
@@ -174,10 +176,10 @@ static void _chatlog(const LogType log_type, const wchar_t* message)
     }
     const size_t len = 5 + wcslen(GWTOOLBOX_SENDER) + 4 + 13 + wcslen(message) + 4 + 1;
     auto to_send = new wchar_t[len];
-    swprintf(to_send, len - 1, L"<a=1>%s</a><c=#%6X>: %s</c>", GWTOOLBOX_SENDER, color, message);
+    ASSERT(swprintf(to_send, len, L"<a=1>%s</a><c=#%6X>: %s</c>", GWTOOLBOX_SENDER, color, message) != -1);
 
-    GW::GameThread::Enqueue([to_send] {
-        WriteChat(GWTOOLBOX_CHAN, to_send, nullptr);
+    GW::GameThread::Enqueue([to_send, add_to_log = log_transient] {
+        WriteChat(GWTOOLBOX_CHAN, to_send, nullptr, add_to_log);
         delete[] to_send;
     });
 
@@ -208,9 +210,28 @@ static void _vchatlog(const LogType log_type, const char* format, const va_list 
     const size_t len = vsnprintf(nullptr, 0, format, argv);
     const auto buf = new char[len + 1];
     vsnprintf(buf, len + 1, format, argv);
-    const std::wstring sbuf2 = GuiUtils::StringToWString(buf);
+    const std::wstring sbuf2 = TextUtils::StringToWString(buf);
     delete[] buf;
     _chatlog(log_type, sbuf2.c_str());
+}
+
+void Log::Flash(const char* format, ...)
+{
+    va_list vl;
+    va_start(vl, format);
+    log_transient = true;
+    _vchatlog(LogType_Info, format, vl);
+    log_transient = false;
+    va_end(vl);
+}
+void Log::FlashW(const wchar_t* format, ...)
+{
+    va_list vl;
+    va_start(vl, format);
+    log_transient = true;
+    _vchatlogW(LogType_Info, format, vl);
+    log_transient = false;
+    va_end(vl);
 }
 
 void Log::Info(const char* format, ...)
@@ -233,7 +254,9 @@ void Log::Error(const char* format, ...)
 {
     va_list vl;
     va_start(vl, format);
+    log_transient = true;
     _vchatlog(LogType_Error, format, vl);
+    log_transient = false;
     va_end(vl);
 }
 
@@ -241,7 +264,9 @@ void Log::ErrorW(const wchar_t* format, ...)
 {
     va_list vl;
     va_start(vl, format);
+    log_transient = true;
     _vchatlogW(LogType_Error, format, vl);
+    log_transient = false;
     va_end(vl);
 }
 
@@ -249,7 +274,9 @@ void Log::Warning(const char* format, ...)
 {
     va_list vl;
     va_start(vl, format);
+    log_transient = true;
     _vchatlog(LogType_Warning, format, vl);
+    log_transient = false;
     va_end(vl);
 }
 
@@ -257,6 +284,8 @@ void Log::WarningW(const wchar_t* format, ...)
 {
     va_list vl;
     va_start(vl, format);
+    log_transient = true;
     _vchatlogW(LogType_Warning, format, vl);
+    log_transient = false;
     va_end(vl);
 }

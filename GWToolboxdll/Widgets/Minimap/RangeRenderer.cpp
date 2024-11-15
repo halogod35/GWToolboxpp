@@ -12,8 +12,9 @@
 #include <GWCA/Managers/SkillbarMgr.h>
 
 #include <Widgets/Minimap/RangeRenderer.h>
+#include <Widgets/Minimap/Minimap.h>
 
-#include "Minimap.h"
+#include <ImGuiAddons.h>
 
 void RangeRenderer::LoadSettings(const ToolboxIni* ini, const char* section)
 {
@@ -60,10 +61,12 @@ void RangeRenderer::SaveSettings(ToolboxIni* ini, const char* section) const
 void RangeRenderer::DrawSettings()
 {
     bool changed = false;
-    bool confirm = false;
-    if (ImGui::SmallConfirmButton("Restore Defaults", &confirm)) {
-        LoadDefaults();
-    }
+    ImGui::SmallConfirmButton("Restore Defaults", "Are you sure?", [&](bool result, void*) {
+        if (result) {
+            LoadDefaults();
+            Invalidate();
+        }
+    });
     changed |= Colors::DrawSettingHueWheel("HoS range", &color_range_hos);
     changed |= Colors::DrawSettingHueWheel("Aggro range", &color_range_aggro);
     changed |= Colors::DrawSettingHueWheel("Cast range", &color_range_cast);

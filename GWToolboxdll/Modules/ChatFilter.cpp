@@ -3,6 +3,7 @@
 #include <Defines.h>
 #include <GWCA/Packets/StoC.h>
 
+#include <GWCA/GameEntities/Friendslist.h>
 #include <GWCA/GameEntities/Map.h>
 
 #include <GWCA/Managers/FriendListMgr.h>
@@ -10,18 +11,17 @@
 #include <GWCA/Managers/ChatMgr.h>
 #include <GWCA/Managers/StoCMgr.h>
 #include <GWCA/Managers/UIMgr.h>
+#include <GWCA/Managers/PlayerMgr.h>
 
 #include <ImGuiAddons.h>
 #include <Logger.h>
 
 #include <Modules/Resources.h>
 #include <Modules/ChatFilter.h>
-#include <GWCA/GameEntities/Friendslist.h>
 #include <Utils/ToolboxUtils.h>
-#include <Utils/GuiUtils.h>
 
-#include "GWToolbox.h"
-#include "GWCA/Managers/PlayerMgr.h"
+#include <GWToolbox.h>
+#include <Utils/TextUtils.h>
 
 //#define PRINT_CHAT_PACKETS
 
@@ -58,6 +58,8 @@ namespace {
     bool inventory_is_full = false;
     bool item_cannot_be_used = false; // Includes other error messages, see ChatFilter.cpp.
     bool not_enough_energy = false;   // Includes other error messages, see ChatFilter.cpp.
+    bool targetting_messages_from_me = false;   // Includes other error messages, see ChatFilter.cpp.
+    bool targetting_messages_from_others = false;   // Includes other error messages, see ChatFilter.cpp.
     bool item_already_identified = false;
 
     bool messagebycontent = false;
@@ -68,6 +70,11 @@ namespace {
     bool filter_channel_trade = true;
     bool filter_channel_alliance = false;
     bool filter_channel_emotes = false;
+
+    const char* targetting_messages_help = "'I'm following <target>.'\n\
+'I'm attacking <target>.'\n\
+'I'm targetting <target>.'\n\
+'I'm using <skill> on <target>'";
 
     constexpr size_t FILTER_BUF_SIZE = 1024 * 16;
 
@@ -107,7 +114,6 @@ namespace {
     }
 #endif
     GW::HookEntry BlockIfApplicable_Entry;
-    GW::HookEntry ClearIfApplicable_Entry;
 
 
     size_t GetSegmentLength(const wchar_t* encoded_segment)
@@ -162,7 +168,7 @@ namespace {
 
     void ParseBuffer(const char* text, std::vector<std::wstring>& words)
     {
-        using namespace GuiUtils;
+        using namespace TextUtils;
         words.clear();
         const auto text_ws = RemoveDiacritics(ToLower(StringToWString(text)));
         std::wstringstream stream(text_ws.c_str());
@@ -177,7 +183,7 @@ namespace {
 
     void ParseBuffer(const char* text, std::vector<std::wregex>& regex)
     {
-        using namespace GuiUtils;
+        using namespace TextUtils;
         regex.clear();
         const auto text_ws = RemoveDiacritics(StringToWString(text));
         std::wstringstream stream(text_ws.c_str());
@@ -316,26 +322,30 @@ namespace {
         return a && a->type == GW::RegionType::Challenge;
     }
 
-    bool IsPlayerName(const wchar_t* encoded_string)
+    bool IsPlayerNameToken(const wchar_t* encoded_string)
     {
-        return encoded_string && wcscmp(encoded_string, L"\xba9\x107") == 0;
+        return encoded_string && wcsncmp(encoded_string, L"\xba9\x107", 2) == 0;
     }
 
-
-    [[maybe_unused]] bool IsCurrentPlayerName(const wchar_t* encoded_string)
+    bool IsCurrentPlayerName(const wchar_t* _player_name)
     {
-        if (!IsPlayerName(encoded_string)) {
-            return false;
-        }
-        const auto player_name = GW::PlayerMgr::GetPlayerName();
-        return player_name && wcsncmp(player_name, &encoded_string[2], wcslen(player_name)) == 0;
+        const auto player_name = _player_name ? GW::PlayerMgr::GetPlayerName() : nullptr;
+        return player_name && wcsncmp(player_name, _player_name, wcslen(player_name)) == 0;
+    }
+
+    bool ShouldIgnoreBySender(const std::wstring& sender)
+    {
+        return GW::FriendListMgr::GetFriend(nullptr, sender.c_str(), GW::FriendType::Ignore) != nullptr;
     }
 
     // Should this message be ignored by encoded string?
-    bool ShouldIgnore(const wchar_t* message)
+    bool ShouldIgnore(const wchar_t* message, const wchar_t* sender = nullptr)
     {
         if (!message) {
             return false;
+        }
+        if (sender && ShouldIgnoreBySender(sender)) {
+            return true;
         }
 
         switch (message[0]) {
@@ -351,21 +361,20 @@ namespace {
             case 0x76D:
                 return false; // whisper received.
             case 0x76E:
-                return false; // whisper sended.
+                return false; // whisper sent.
             case 0x777:
                 return false; // I'm level x and x% of the way earning my next skill point  (author is not part of the message)
-            case 0x778:
-                return false; // I'm following x            (author is not part of the message)
+            case 0x76F: // I'm attacking x           (author is not part of the message)
+            case 0x781: // I'm targeting x            (author is not part of the message)
+            case 0x783: // I'm targeting myself!      (author is not part of the message)
+            case 0x778: // I'm following x            (author is not part of the message)
+                return IsCurrentPlayerName(sender) ? targetting_messages_from_me : targetting_messages_from_others;
             case 0x77B:
                 return false; // I'm talking to x           (author is not part of the message)
             case 0x77C:
-                return false; // I'm wielding x         (author is not part of the message)
+                return false; // I'm wielding x             (author is not part of the message)
             case 0x77D:
                 return false; // I'm wielding x and y       (author is not part of the message)
-            case 0x781:
-                return false; // I'm targeting x            (author is not part of the message)
-            case 0x783:
-                return false; // I'm targeting myself!  (author is not part of the message)
             case 0x791:
                 return false; // emote agree
             case 0x792:
@@ -409,7 +418,7 @@ namespace {
                 if (IsAshes(GetFirstSegment(item_argument))) {
                     return ashes_dropped;
                 }
-                if (IsPlayerName(GetFirstSegment(message))) {
+                if (IsPlayerNameToken(GetFirstSegment(message))) {
                     return false; // Don't block other players dropping items
                 }
                 if (IsRare(item_argument)) {
@@ -422,7 +431,14 @@ namespace {
                 // 0x7F1 0x9A9D 0xE943 0xB33 0x10A <monster> 0x1 0x10B <rarity> 0x10A <item> 0x1 0x1 0x10F <assignee: playernumber + 0x100>
                 // <monster> is wchar_t id of several wchars
                 // <rarity> is 0x108 for common, 0xA40 gold, 0xA42 purple, 0xA43 green
-                const bool for_player = GW::PlayerMgr::GetPlayerNumber() == GetNumericSegment(message, 0x10f);
+                const auto player_number = GetNumericSegment(message, 0x10f);
+                bool for_player = false;
+                if (player_number) {
+                    for_player = player_number == GW::PlayerMgr::GetPlayerNumber();
+                } else {
+                    auto player_name = wcsstr(message, L"\xba9\x107");
+                    for_player = player_name && IsCurrentPlayerName(player_name + 2);
+                }
                 const bool rare = IsRare(GetSecondSegment(message));
                 if (for_player && rare) {
                     return self_drop_rare;
@@ -567,8 +583,10 @@ namespace {
             case 0x8102:
                 switch (message[1]) {
                     // 0xEFE is a player message
-                    case 0x1443:
-                        return player_has_achieved_title; // Player has achieved the title...
+                    case 0x1443: // Player has achieved the title...
+                        return player_has_achieved_title;
+                    case 0x42ad: // I'm using <skill name> on <target name>!
+                        return IsCurrentPlayerName(sender) ? targetting_messages_from_me : targetting_messages_from_others;
                     case 0x4650:
                         return pvp_messages; // skill has been updated for pvp
                     case 0x4651:
@@ -604,6 +622,7 @@ namespace {
                     case 0x9CD:
                         return item_cannot_be_used; // You must wait before using another tonic.
                 }
+                break;
             case 0xAD2:
                 return item_already_identified; // That item is already identified
             case 0xAD7:
@@ -654,7 +673,7 @@ namespace {
             end = &message[i];
         }
 
-        using namespace GuiUtils;
+        using namespace TextUtils;
         const auto str = std::wstring(start, end);
         if (str.empty()) {
             return false;
@@ -730,18 +749,13 @@ namespace {
         return false;
     }
 
-    bool ShouldIgnoreBySender(const std::wstring& sender)
-    {
-        return GW::FriendListMgr::GetFriend(nullptr, sender.c_str(), GW::FriendType::Ignore) != nullptr;
-    }
-
     // Should this message for this channel be ignored either by encoded string or content?
-    bool ShouldIgnore(const wchar_t* message, const uint32_t channel)
+    bool ShouldIgnore(const wchar_t* message, const uint32_t channel, const wchar_t* player_name = nullptr)
     {
         if (ShouldBlockByChannel(channel)) {
             return true;
         }
-        if (ShouldIgnore(message)) {
+        if (ShouldIgnore(message, player_name)) {
             return true;
         }
         if (!ShouldFilterByChannel(channel)) {
@@ -750,51 +764,35 @@ namespace {
         return ShouldIgnoreByContent(message);
     }
 
-    // Sets HookStatus to blocked if packet has content that hits the filter.
-    void BlockIfApplicable(GW::HookStatus* status, GW::Packet::StoC::PacketBase* packet)
-    {
-        if (status->blocked) {
+    void OnUIMessage(GW::HookStatus* status, GW::UI::UIMessage message_id, void* wparam, void*) {
+        if (status->blocked)
             return;
-        }
-        uint32_t channel;
-        const wchar_t* message;
-        switch (packet->header) {
-            case GAME_SMSG_CHAT_MESSAGE_GLOBAL: {
-                const auto p = static_cast<GW::Packet::StoC::MessageGlobal*>(packet);
-                channel = p->channel;
-                message = ToolboxUtils::GetMessageCore();
+        switch (message_id) {
+        case GW::UI::UIMessage::kLogChatMessage: {
+            const auto packet = (GW::UI::UIPacket::kLogChatMessage*)wparam;
+            if (!status->blocked && ShouldIgnore(packet->message, packet->channel)) {
+                status->blocked = true;
             }
-            break;
-            case GAME_SMSG_CHAT_MESSAGE_SERVER: {
-                const auto p = static_cast<GW::Packet::StoC::MessageServer*>(packet);
-                channel = p->channel;
-                message = ToolboxUtils::GetMessageCore();
+        } break;
+        case GW::UI::UIMessage::kPrintChatMessage: {
+            const auto packet = (GW::UI::UIPacket::kPrintChatMessage*)wparam;
+            if (!status->blocked && ShouldIgnore(packet->message, packet->channel)) {
+                status->blocked = true;
             }
-            break;
-            case GAME_SMSG_CHAT_MESSAGE_LOCAL: {
-                const auto p = static_cast<GW::Packet::StoC::MessageLocal*>(packet);
-                channel = p->channel;
-                message = ToolboxUtils::GetMessageCore();
+        } break;
+        case GW::UI::UIMessage::kPlayerChatMessage: {
+            const auto packet = (GW::UI::UIPacket::kPlayerChatMessage*)wparam;
+            const auto player_name = GW::PlayerMgr::GetPlayerName(packet->player_number);
+            if (!status->blocked && ShouldIgnore(packet->message, packet->channel, player_name)) {
+                status->blocked = true;
             }
-            break;
-            default:
-                return;
-        }
-        if (ShouldIgnore(message, channel)) {
-            // Message channel is hidden, or message content is blocked
-            status->blocked = true;
-        }
-        else if (ShouldIgnoreBySender(ToolboxUtils::GetSenderFromPacket(packet))) {
-            // Sender is in player's ignore list
-            status->blocked = true;
-        }
-    }
-
-    // Ensure the message buffer is cleared if this packet has been blocked
-    void ClearMessageBufferIfBlocked(const GW::HookStatus* status, GW::Packet::StoC::PacketBase*)
-    {
-        if (status->blocked) {
-            ToolboxUtils::ClearMessageCore();
+        } break;
+        case GW::UI::UIMessage::kWriteToChatLog: {
+            const auto packet = (GW::UI::UIPacket::kWriteToChatLog*)wparam;
+            if (!status->blocked && ShouldIgnore(packet->message, packet->channel)) {
+                status->blocked = true;
+            }
+        } break;
         }
     }
 }
@@ -803,28 +801,19 @@ void ChatFilter::Initialize()
 {
     ToolboxModule::Initialize();
 
-    GW::StoC::RegisterPacketCallback(&BlockIfApplicable_Entry, GAME_SMSG_CHAT_MESSAGE_SERVER, BlockIfApplicable);
-    GW::StoC::RegisterPacketCallback(&BlockIfApplicable_Entry, GAME_SMSG_CHAT_MESSAGE_GLOBAL, BlockIfApplicable);
-    GW::StoC::RegisterPacketCallback(&BlockIfApplicable_Entry, GAME_SMSG_CHAT_MESSAGE_LOCAL, BlockIfApplicable);
-
-    GW::StoC::RegisterPostPacketCallback(&ClearIfApplicable_Entry, GAME_SMSG_CHAT_MESSAGE_SERVER, ClearMessageBufferIfBlocked);
-    GW::StoC::RegisterPostPacketCallback(&ClearIfApplicable_Entry, GAME_SMSG_CHAT_MESSAGE_GLOBAL, ClearMessageBufferIfBlocked);
-    GW::StoC::RegisterPostPacketCallback(&ClearIfApplicable_Entry, GAME_SMSG_CHAT_MESSAGE_LOCAL, ClearMessageBufferIfBlocked);
-
-    GW::UI::RegisterUIMessageCallback(&BlockIfApplicable_Entry, GW::UI::UIMessage::kWriteToChatLog, [](GW::HookStatus* status, GW::UI::UIMessage, void* wparam, void*) {
-        const auto message = ((wchar_t**)wparam)[1];
-        const auto channel = *(uint32_t*)wparam;
-        if (!status->blocked && ShouldIgnore(message, channel)) {
-            status->blocked = true;
-        }
-        });
+    constexpr auto message_ids = {
+        GW::UI::UIMessage::kPrintChatMessage,
+        GW::UI::UIMessage::kLogChatMessage,
+        GW::UI::UIMessage::kWriteToChatLog,
+        GW::UI::UIMessage::kPlayerChatMessage
+    };
+    for (auto message_id : message_ids) {
+        GW::UI::RegisterUIMessageCallback(&BlockIfApplicable_Entry, message_id, OnUIMessage, -0x8000);
+    }
 }
 
 void ChatFilter::Terminate() {
     ToolboxModule::Terminate();
-    GW::StoC::RemoveCallback(GAME_SMSG_CHAT_MESSAGE_SERVER, &BlockIfApplicable_Entry);
-    GW::StoC::RemoveCallback(GAME_SMSG_CHAT_MESSAGE_GLOBAL, &BlockIfApplicable_Entry);
-    GW::StoC::RemoveCallback(GAME_SMSG_CHAT_MESSAGE_LOCAL, &BlockIfApplicable_Entry);
 
     GW::UI::RemoveUIMessageCallback(&BlockIfApplicable_Entry);
 }
@@ -864,6 +853,8 @@ void ChatFilter::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(opening_chest_messages);
     LOAD_BOOL(inventory_is_full);
     LOAD_BOOL(not_enough_energy);
+    LOAD_BOOL(targetting_messages_from_me);
+    LOAD_BOOL(targetting_messages_from_others);
     LOAD_BOOL(item_cannot_be_used);
     LOAD_BOOL(item_already_identified);
     LOAD_BOOL(faction_gain);
@@ -942,6 +933,8 @@ void ChatFilter::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(opening_chest_messages);
     SAVE_BOOL(inventory_is_full);
     SAVE_BOOL(not_enough_energy);
+    SAVE_BOOL(targetting_messages_from_me);
+    SAVE_BOOL(targetting_messages_from_others);
     SAVE_BOOL(item_cannot_be_used);
     SAVE_BOOL(item_already_identified);
     SAVE_BOOL(faction_gain);
@@ -1037,6 +1030,7 @@ void ChatFilter::DrawSettingsInternal()
     ImGui::Checkbox("'Player x has achieved title...'", &player_has_achieved_title);
     ImGui::NextSpacedElement();
     ImGui::Checkbox("'You gain x faction'", &faction_gain);
+
     ImGui::Separator();
     ImGui::Text("Warnings");
     ImGui::StartSpacedElements(350.f * ImGui::FontScale());
@@ -1095,6 +1089,12 @@ void ChatFilter::DrawSettingsInternal()
     ImGui::Checkbox("Salvaging messages", &salvage_messages);
     ImGui::NextSpacedElement();
     ImGui::Checkbox("Ashes dropped messages", &ashes_dropped);
+    ImGui::NextSpacedElement();
+    ImGui::Checkbox("Targetting messages from me", &targetting_messages_from_me);
+    ImGui::ShowHelp(targetting_messages_help);
+    ImGui::NextSpacedElement();
+    ImGui::Checkbox("Targetting messages from others", &targetting_messages_from_others);
+    ImGui::ShowHelp(targetting_messages_help);
 
     ImGui::Separator();
     ImGui::Checkbox("Block messages from inactive chat channels", &block_messages_from_inactive_channels);

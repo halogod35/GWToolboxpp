@@ -230,7 +230,7 @@ class HotkeyToggle : public TBHotkey {
         Count
     } target = Clicker;
 
-    static bool GetText(void*, int idx, const char** out_text);
+    static const char* GetText(void*, int idx);
 
 public:
     static bool IsValid(const ToolboxIni* ini, const char* section);
@@ -240,6 +240,10 @@ public:
     HotkeyToggle(const ToolboxIni* ini, const char* section);
     ~HotkeyToggle() override;
     void Save(ToolboxIni* ini, const char* section) const override;
+
+    // Used to ensure that clicker doesn't clog up the event queue
+    static inline bool processing = false;
+    static inline int clicker_delay_ms = 20;
 
     bool Draw() override;
     int Description(char* buf, size_t bufsz) override;
@@ -267,7 +271,7 @@ class HotkeyAction : public TBHotkey {
         EnterChallenge,
     };
 
-    static bool GetText(void*, int idx, const char** out_text);
+    static const char* GetText(void*, int idx);
 
 public:
     Action action = OpenXunlaiChest;
@@ -359,7 +363,7 @@ public:
 };
 
 class HotkeyPingBuild : public TBHotkey {
-    static bool GetText(void*, int idx, const char** out_text);
+    static const char* GetText(void*, int idx);
 
 public:
     size_t index = 0;
@@ -377,7 +381,7 @@ public:
 };
 
 class HotkeyHeroTeamBuild : public TBHotkey {
-    static bool GetText(void*, int idx, const char** out_text);
+    static const char* GetText(void*, int idx);
 
 public:
     size_t index = 0;

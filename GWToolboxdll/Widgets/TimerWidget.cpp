@@ -21,6 +21,8 @@
 #include <Modules/GameSettings.h>
 #include <Widgets/TimerWidget.h>
 
+#include "Utils/FontLoader.h"
+
 using namespace std::chrono;
 
 namespace {
@@ -444,7 +446,7 @@ void TimerWidget::Initialize()
     in_explorable = GW::Map::GetInstanceType() == GW::Constants::InstanceType::Explorable;
     GW::Chat::CreateCommand(L"resettimer", [](GW::HookStatus*, const wchar_t*, const int, const LPWSTR*) {
         reset_next_loading_screen = true;
-        Log::Info("Resetting timer at the next loading screen.");
+        Log::Flash("Resetting timer at the next loading screen.");
     });
     GW::Chat::CreateCommand(L"timerreset", [](GW::HookStatus*,const wchar_t*, const int, const LPWSTR*) {
         reset_next_loading_screen = true;
@@ -659,25 +661,25 @@ void TimerWidget::Draw(IDirect3DDevice9*)
         return;
     }
 
-    const bool ctrl_pressed = ImGui::IsKeyDown(ImGuiKey_ModCtrl);
+    const bool ctrl_pressed = ImGui::IsKeyDown(ImGuiMod_Ctrl);
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
     ImGui::SetNextWindowSize(ImVec2(250.0f, 90.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin(Name(), nullptr, GetWinFlags(0, !(click_to_print_time && ctrl_pressed)))) {
         // Main timer:
         print_time(GetTimer(), show_decimals, 32, timer_buffer);
-        ImGui::PushFont(GetFont(GuiUtils::FontSize::widget_large));
+        ImGui::PushFont(FontLoader::GetFont(FontLoader::FontSize::widget_large));
         ImGui::TextShadowed(timer_buffer, {2, 2});
         ImGui::PopFont();
 
         if (also_show_instance_timer) {
             print_time(milliseconds(GW::Map::GetInstanceTime()), show_decimals, 32, timer_buffer);
-            ImGui::PushFont(GetFont(GuiUtils::FontSize::widget_large));
+            ImGui::PushFont(FontLoader::GetFont(FontLoader::FontSize::widget_large));
             ImGui::TextShadowed(timer_buffer, {2, 2});
             ImGui::PopFont();
         }
 
         auto drawTimer = [](const char* buffer, const ImColor* _extra_color = nullptr) {
-            ImGui::PushFont(GetFont(GuiUtils::FontSize::widget_label));
+            ImGui::PushFont(FontLoader::GetFont(FontLoader::FontSize::widget_label));
             const ImVec2 cur2 = ImGui::GetCursorPos();
             ImGui::SetCursorPos(ImVec2(cur2.x + 1, cur2.y + 1));
             ImGui::TextColored(ImColor(0, 0, 0), buffer);

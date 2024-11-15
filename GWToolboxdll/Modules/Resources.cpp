@@ -5,11 +5,12 @@
 
 #include <GWCA/GameEntities/Map.h>
 #include <GWCA/GameEntities/Item.h>
+#include <GWCA/GameEntities/Skill.h>
 
+#include <GWCA/Managers/SkillbarMgr.h>
 #include <GWCA/Managers/MapMgr.h>
 #include <GWCA/Managers/UIMgr.h>
 #include <GWCA/Managers/ItemMgr.h>
-
 
 #include <EmbeddedResource.h>
 #include <GWToolbox.h>
@@ -22,15 +23,17 @@
 #include <Modules/Resources.h>
 #include <Utils/GuiUtils.h>
 
+#pragma warning(push) // Save current warning state
+#pragma warning(disable : 4189) // local variable is initialized but not referenced
 #include <include/nfd.h>
 #include <nfd_common.c>
 #include <nfd_win.cpp>
+#pragma warning(pop)
 #include <wolfssl/wolfcrypt/asn.h>
 
-#include "GwDatTextureModule.h"
-#include "GWCA/GameEntities/Skill.h"
-#include "GWCA/Managers/SkillbarMgr.h"
+#include <Modules/GwDatTextureModule.h>
 #include <Constants/EncStrings.h>
+#include <Utils/TextUtils.h>
 
 namespace {
     const char* d3dErrorMessage(HRESULT code)
@@ -105,6 +108,9 @@ namespace {
     // tasks to be done in main thread
     std::queue<std::function<void()>> main_jobs;
 
+
+    IDirect3DTexture9* empty_texture_ptr = 0;
+
     bool should_stop = false;
 
     std::vector<std::thread*> workers;
@@ -128,7 +134,7 @@ namespace {
     void OnUIMessage(GW::HookStatus*, const GW::UI::UIMessage message_id, void* wparam, void*)
     {
         switch (message_id) {
-            case GW::UI::UIMessage::kEnumPreference:
+            case GW::UI::UIMessage::kPreferenceEnumChanged:
                 if (wparam && *static_cast<GW::UI::EnumPreference*>(wparam) == GW::UI::EnumPreference::InterfaceSize) {
                     Resources::GetGWScaleMultiplier(true); // Re-fetch ui scale indicator
                 }
@@ -163,6 +169,18 @@ namespace {
         r->SetMethod(HttpMethod::Get);
         r->SetVerifyHost(false);
     }
+
+    const std::string HashStr(const std::string& str) {
+        const auto bytes_to_hash = std::vector<byte>(str.begin(), str.end());
+        auto hash = std::vector<byte>(WC_SHA256_DIGEST_SIZE);
+        wc_Sha256Hash(bytes_to_hash.data(), bytes_to_hash.size(), hash.data());
+        std::stringstream hexstream;
+        hexstream << std::hex << std::setfill('0');
+        for (auto b : hash) {
+            hexstream << std::setw(2) << static_cast<unsigned>(b);
+        }
+        return hexstream.str();
+        };
 } // namespace
 
 Resources::Resources()
@@ -357,7 +375,7 @@ void Resources::Initialize()
             WorkerUpdate();
         }));
     }
-    RegisterUIMessageCallback(&OnUIMessage_Hook, GW::UI::UIMessage::kEnumPreference, OnUIMessage, 0x8000);
+    RegisterUIMessageCallback(&OnUIMessage_Hook, GW::UI::UIMessage::kPreferenceEnumChanged, OnUIMessage, 0x8000);
 }
 
 void Resources::Cleanup()
@@ -553,67 +571,53 @@ void Resources::Download(const std::string& url, AsyncLoadMbCallback callback, v
 
 void Resources::Download(const std::string& url, AsyncLoadMbCallback callback, void* context, std::chrono::seconds cache_duration)
 {
-    const auto hash_name = [](const std::filesystem::path& file_name) -> std::filesystem::path {
-        const auto str = file_name.string();
-        const auto bytes_to_hash = std::vector<byte>(str.begin(), str.end());
-        auto hash = std::vector<byte>(WC_SHA256_DIGEST_SIZE);
-        wc_Sha256Hash(bytes_to_hash.data(), bytes_to_hash.size(), hash.data());
-        std::stringstream hexstream;
-        hexstream << std::hex << std::setfill('0');
-        for (auto b : hash) {
-            hexstream << std::setw(2) << static_cast<unsigned>(b);
-        }
-        const auto hash_str = hexstream.str();
-        const auto hash_file = std::filesystem::path(hash_str);
-        return hash_file;
-    };
+    EnqueueWorkerTask([url, callback, context, &cache_duration] {
 
-    const auto get_cache_modified_time = [](const std::filesystem::path& file_name) -> std::optional<std::filesystem::file_time_type> {
-        if (!std::filesystem::exists(file_name)) {
-            return std::optional<std::filesystem::file_time_type>();
-        }
 
-        const auto file_time = std::filesystem::last_write_time(file_name);
-        return file_time;
-    };
+        const auto get_cache_modified_time = [](const std::filesystem::path& file_name) -> std::optional<std::filesystem::file_time_type> {
+            if (!std::filesystem::exists(file_name)) {
+                return std::optional<std::filesystem::file_time_type>();
+            }
 
-    const auto load_from_cache = [](const std::filesystem::path& file_name) -> std::optional<std::string> {
-        std::ifstream cache_file(file_name);
-        if (!cache_file.is_open()) {
-            return {};
-        }
+            const auto file_time = std::filesystem::last_write_time(file_name);
+            return file_time;
+            };
 
-        std::string contents((std::istreambuf_iterator<char>(cache_file)), std::istreambuf_iterator<char>());
-        return contents;
-    };
+        const auto load_from_cache = [](const std::filesystem::path& file_name) -> std::optional<std::string> {
+            std::ifstream cache_file(file_name);
+            if (!cache_file.is_open()) {
+                return {};
+            }
 
-    const auto save_to_cache = [](const std::filesystem::path& file_name, const std::string& content) -> bool {
-        std::filesystem::create_directories(file_name.parent_path());
-        std::ofstream cache_file(file_name);
-        if (!cache_file.is_open()) {
-            return false;
-        }
+            std::string contents((std::istreambuf_iterator<char>(cache_file)), std::istreambuf_iterator<char>());
+            return contents;
+            };
 
-        cache_file << content;
-        return true;
-    };
+        const auto save_to_cache = [](const std::filesystem::path& file_name, const std::string& content) -> bool {
+            std::filesystem::create_directories(file_name.parent_path());
+            std::ofstream cache_file(file_name);
+            if (!cache_file.is_open()) {
+                return false;
+            }
 
-    const auto remove_protocol = [](const std::string& url) -> std::string {
-        const std::string http = "http://";
-        const std::string https = "https://";
+            cache_file << content;
+            return true;
+            };
 
-        // Check if the URL starts with http:// or https:// and remove it
-        if (url.substr(0, http.size()) == http) {
-            return url.substr(http.size());
-        }
-        if (url.substr(0, https.size()) == https) {
-            return url.substr(https.size());
-        }
-        return url; // Return the original if no match is found
-    };
+        const auto remove_protocol = [](const std::string& url) -> std::string {
+            const std::string http = "http://";
+            const std::string https = "https://";
 
-    EnqueueWorkerTask([url, callback, context, &cache_duration, &get_cache_modified_time, &load_from_cache, &save_to_cache, &remove_protocol, &hash_name] {
-        const auto cache_path = Resources::GetPath("cache") / hash_name(remove_protocol(url));
+            // Check if the URL starts with http:// or https:// and remove it
+            if (url.substr(0, http.size()) == http) {
+                return url.substr(http.size());
+            }
+            if (url.substr(0, https.size()) == https) {
+                return url.substr(https.size());
+            }
+            return url; // Return the original if no match is found
+            };
+        const auto cache_path = Resources::GetPath("cache") / HashStr(remove_protocol(url));
         const auto expiration = get_cache_modified_time(cache_path);
         if (expiration.has_value() &&
             expiration.value() - std::chrono::file_clock::now() < cache_duration) {
@@ -744,7 +748,7 @@ void Resources::LoadTexture(IDirect3DTexture9** texture, const std::filesystem::
             callback(success, error);
         }
         else if (!success) {
-            Log::LogW(L"Failed to load texture from file %s\n%s", path_to_file.wstring().c_str(), error.c_str());
+            Log::LogW(L"Failed to load texture from file %s\n%s", TextUtils::PrintFilename(path_to_file.wstring()).c_str(), error.c_str());
         }
     });
 }
@@ -774,7 +778,7 @@ void Resources::LoadTexture(IDirect3DTexture9** texture, const std::filesystem::
                 callback(success, error);
             }
             else {
-                Log::LogW(L"Failed to EnsureFileExists %s\n%S", path_to_file.wstring().c_str(), error.c_str());
+                Log::LogW(L"Failed to EnsureFileExists %s\n%S", TextUtils::PrintFilename(path_to_file.wstring()).c_str(), error.c_str());
             }
         }
     });
@@ -815,7 +819,7 @@ bool Resources::ResourceToFile(const WORD id, const std::filesystem::path& path_
     DWORD bytesWritten;
     const BOOL wfRes = WriteFile(hFile, hRes, size, &bytesWritten, nullptr);
     if (wfRes != TRUE) {
-        StrSwprintf(error, L"Error writing file %s - Error is %lu", path_to_file.filename().wstring().c_str(), GetLastError());
+        StrSwprintf(error, L"Error writing file %s - Error is %lu", TextUtils::PrintFilename(path_to_file.filename().wstring()).c_str(), GetLastError());
         return false;
     }
     if (bytesWritten != size) {
@@ -916,11 +920,11 @@ IDirect3DTexture9** Resources::GetDamagetypeImage(std::string dmg_type)
     if (damagetype_icon_urls.contains(dmg_type)) {
         const auto path = GetPath(DMGTYPE_ICONS_PATH);
         EnsureFolderExists(path);
-        const auto local_path = path / GuiUtils::SanitiseFilename(dmg_type + ".png");
+        const auto local_path = path / TextUtils::SanitiseFilename(dmg_type + ".png");
         const auto remote_path = std::format("https://wiki.guildwars.com/images/thumb/{}", damagetype_icon_urls.at(dmg_type));
         LoadTexture(texture, local_path, remote_path, [dmg_type](const bool success, const std::wstring& error) {
             if (!success) {
-                const auto dmg_type_wstr = GuiUtils::StringToWString(dmg_type);
+                const auto dmg_type_wstr = TextUtils::StringToWString(dmg_type);
                 Log::ErrorW(L"Failed to load icon for %d\n%s", dmg_type_wstr.c_str(), error.c_str());
             }
         });
@@ -938,7 +942,7 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
     else {
         filename_on_disk = filename;
     }
-    const auto filename_sanitised = GuiUtils::SanitiseFilename(filename_on_disk);
+    const auto filename_sanitised = TextUtils::SanitiseFilename(filename_on_disk);
     if (guild_wars_wiki_images.contains(filename_sanitised)) {
         return guild_wars_wiki_images.at(filename_sanitised);
     }
@@ -966,10 +970,10 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
     }
     // No local file found; download from wiki via skill link URL
     std::string wiki_url = "https://wiki.guildwars.com/wiki/File:";
-    wiki_url.append(GuiUtils::UrlEncode(filename, '_'));
+    wiki_url.append(TextUtils::UrlEncode(filename, '_'));
     Instance().Download(wiki_url, [texture, filename_sanitised, callback, width](const bool ok, const std::string& response, void*) {
         if (!ok) {
-            callback(ok, GuiUtils::StringToWString(response));
+            callback(ok, TextUtils::StringToWString(response));
             return; // Already logged whatever errors
         }
 
@@ -1005,8 +1009,7 @@ IDirect3DTexture9** Resources::GetGuildWarsWikiImage(const char* filename, size_
 IDirect3DTexture9** Resources::GetSkillImage(GW::Constants::SkillID skill_id)
 {
     const auto skill = GW::SkillbarMgr::GetSkillConstantData(skill_id);
-    ASSERT(skill && skill->icon_file_id);
-    return GwDatTextureModule::LoadTextureFromFileId(skill->icon_file_id);
+    return skill && skill->icon_file_id ? GwDatTextureModule::LoadTextureFromFileId(skill->icon_file_id) : &empty_texture_ptr;
 }
 
 IDirect3DTexture9** Resources::GetSkillImageFromGWW(GW::Constants::SkillID skill_id)
@@ -1051,7 +1054,7 @@ IDirect3DTexture9** Resources::GetSkillImageFromGWW(GW::Constants::SkillID skill
     snprintf(url, _countof(url), "https://wiki.guildwars.com/wiki/Game_link:Skill_%d", skill_id);
     Instance().Download(url, [texture, skill_id, callback](const bool ok, const std::string& response, void*) {
         if (!ok) {
-            callback(ok, GuiUtils::StringToWString(response));
+            callback(ok, TextUtils::StringToWString(response));
             return; // Already logged whatever errors
         }
 
@@ -1181,7 +1184,7 @@ const wchar_t* Resources::GetRegionName(const GW::Constants::MapID map_id)
 GuiUtils::EncString* Resources::DecodeStringId(const uint32_t enc_str_id, GW::Constants::Language language)
 {
     if (language == (GW::Constants::Language)0xff)
-        language = static_cast<GW::Constants::Language>(GW::UI::GetPreference(GW::UI::NumberPreference::TextLanguage));
+        language = GW::UI::GetTextLanguage();
     const auto by_language = encoded_string_ids.find(language);
     if (by_language != encoded_string_ids.end()) {
         const auto found = by_language->second.find(enc_str_id);
@@ -1226,7 +1229,7 @@ IDirect3DTexture9** Resources::GetItemImage(const std::wstring& item_name)
     }
     const auto callback = [item_name](const bool success, const std::wstring& error) {
         if (!success) {
-            Log::ErrorW(L"Failed to load item image %s\n%s", item_name.c_str(), error.c_str());
+            Log::LogW(L"Error: Failed to load item image %s\n%s", item_name.c_str(), error.c_str());
         }
         else {
             Log::LogW(L"Loaded item image %s", item_name.c_str());
@@ -1250,10 +1253,10 @@ IDirect3DTexture9** Resources::GetItemImage(const std::wstring& item_name)
     const std::string search_str = GuiUtils::WikiUrl(item_name);
     Instance().Download(search_str, [texture, item_name, callback](const bool ok, const std::string& response, void*) {
         if (!ok) {
-            callback(ok, GuiUtils::StringToWString(response));
+            callback(ok, TextUtils::StringToWString(response));
             return;
         }
-        const std::string item_name_str = GuiUtils::WStringToString(item_name);
+        const std::string item_name_str = TextUtils::WStringToString(item_name);
         // matches any characters that need to be escaped in RegEx
         static const std::regex specialChars{R"([-[\]{}()*+?.,\^$|#\s])"};
         const std::string sanitized = std::regex_replace(item_name_str, specialChars, R"(\$&)");
@@ -1268,7 +1271,7 @@ IDirect3DTexture9** Resources::GetItemImage(const std::wstring& item_name)
                 trigger_failure_callback(callback, L"Failed to find title HTML for %s from wiki", item_name.c_str());
                 return;
             }
-            const std::string html_item_name = GuiUtils::HtmlEncode(m[1].str());
+            const std::string html_item_name = TextUtils::HtmlEncode(m[1].str());
             snprintf(regex_str, sizeof(regex_str), R"(<img[^>]+alt=['"][^>]*%s[^>]*['"][^>]+src=['"]([^"']+)([.](png)))", html_item_name.c_str());
             if (!std::regex_search(response, m, std::regex(regex_str))) {
                 trigger_failure_callback(callback, L"Failed to find image HTML for %s from wiki", item_name.c_str());

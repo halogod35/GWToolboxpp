@@ -23,6 +23,7 @@
 #include <Utils/GuiUtils.h>
 #include <Utils/ToolboxUtils.h>
 #include <Defines.h>
+#include <Utils/TextUtils.h>
 
 namespace {
     bool is_platform_compatible = false;
@@ -312,7 +313,8 @@ namespace {
         {GAME_SMSG_PARTY_PLAYER_READY, OnPartyPlayerReady},
         {GAME_SMSG_INSTANCE_LOADED, OnMapChange},
         {GAME_SMSG_AGENT_UPDATE_EFFECTS, OnAgentUpdateEffects},
-        {GAME_SMSG_PARTY_JOIN_REQUEST,OnPartyInviteReceived}
+        {GAME_SMSG_PARTY_JOIN_REQUEST,OnPartyInviteReceived},
+        {GAME_SMSG_PARTY_SEARCH_REQUEST_JOIN,OnPartyInviteReceived}
     };
 } // namespace
 ToastNotifications::Toast::Toast(const std::wstring& _title, const std::wstring& _message)
@@ -341,7 +343,7 @@ void ToastNotifications::Toast::toastDismissed(WinToastDismissalReason) const
 
 void ToastNotifications::Toast::toastFailed(HRESULT err) const
 {
-    Log::Error("Failed to show toast, error code %d",err);
+    Log::Error("Failed to show toast, error code: %d", err);
     TriggerToastCallback(this, false);
 }
 
@@ -354,7 +356,7 @@ bool ToastNotifications::Toast::send()
     }
     if (!instance->isInitialized()) {
         instance->setAppName(L"Guild Wars");
-        const auto version = GuiUtils::StringToWString(GWTOOLBOXDLL_VERSION);
+        const auto version = TextUtils::StringToWString(GWTOOLBOXDLL_VERSION);
         const auto aumi = WinToast::configureAUMI(L"gwtoolbox", L"GWToolbox++", L"GWToolbox++", version);
         instance->setAppUserModelId(aumi);
         if (!instance->initialize()) {

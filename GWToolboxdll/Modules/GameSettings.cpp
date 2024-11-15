@@ -53,18 +53,15 @@
 #include <Modules/ChatSettings.h>
 #include <Modules/DialogModule.h>
 #include <Modules/GameSettings.h>
-#include <Modules/PriceCheckerModule.h>
+#include <Windows/CompletionWindow.h>
 
 #include <Color.h>
 #include <hidusage.h>
 #include <Logger.h>
 #include <Timer.h>
 #include <Defines.h>
-
-#include <d3d9on12.h>
-
-#include "Windows/FriendListWindow.h"
-#include <Keys.h>
+#include <Utils/FontLoader.h>
+#include <Utils/TextUtils.h>
 
 #pragma warning(disable : 6011)
 #pragma comment(lib,"Version.lib")
@@ -137,6 +134,9 @@ namespace {
     bool block_experience_gain = false;
     bool block_zero_experience_gain = true;
     bool lazy_chest_looting = false;
+
+    uint32_t last_online_status = static_cast<uint32_t>(GW::FriendStatus::Online);
+    bool remember_online_status = true;
 
     bool targeting_nearest_item = false;
 
@@ -213,6 +213,20 @@ namespace {
     bool keep_current_quest_when_new_quest_added = false;
 
     bool automatically_flag_pet_to_fight_called_target = true;
+
+    bool skip_fade_animations = false;
+    using FadeFrameContent_pt = void(__cdecl*)(uint32_t frame_id, float source_opacity, float target_opacity, float duration_seconds, uint32_t unk);
+    FadeFrameContent_pt FadeFrameContent_Func = nullptr, FadeFrameContent_Ret = nullptr;
+
+    void OnFadeFrameContent(uint32_t frame_id, float source_opacity, float target_opacity, float duration_seconds, uint32_t unk) {
+        GW::Hook::EnterHook();
+        if (skip_fade_animations) {
+            duration_seconds = 0.0f;
+            source_opacity = target_opacity;
+        }
+        FadeFrameContent_Ret(frame_id, source_opacity, target_opacity, duration_seconds, unk);
+        GW::Hook::LeaveHook();
+    }
 
     Color nametag_color_npc = static_cast<Color>(DEFAULT_NAMETAG_COLOR::NPC);
     Color nametag_color_player_self = static_cast<Color>(DEFAULT_NAMETAG_COLOR::PLAYER_SELF);
@@ -774,12 +788,33 @@ namespace {
         }
     }
 
+    // Override the login status dropdown by sending ui message 0x51 if found
+    void OverrideDefaultOnlineStatus() {
+        uint32_t value_override = 0;
+        switch (static_cast<GW::FriendStatus>(last_online_status)) {
+        case GW::FriendStatus::Online: value_override = 0; break;
+        case GW::FriendStatus::Away: value_override = 1; break;
+        case GW::FriendStatus::DND: value_override = 2; break;
+        case GW::FriendStatus::Offline: value_override = 3;break;
+        }
+        GW::GameThread::Enqueue([value_override]() {
+            const auto frame = GW::UI::GetFrameByLabel(L"StatusOverride");
+            if (!frame) return;
+            GW::UI::SendFrameUIMessage(frame, (GW::UI::UIMessage)0x51, (void*)value_override);
+            });
+    }
+    
     GW::HookEntry OnCreateUIComponent_Entry;
     // Flag email address entry field as a password format (e.g. asterisks instead of email)
     void OnCreateUIComponent(GW::UI::CreateUIComponentPacket* msg)
     {
-        if (hide_email_address && msg->component_label && wcscmp(msg->component_label, L"EditAccount") == 0) {
+        if (!(msg && msg->component_label))
+            return;
+        if (hide_email_address && wcscmp(msg->component_label, L"EditAccount") == 0) {
             msg->component_flags |= 0x01000000;
+        }
+        if (wcscmp(msg->component_label, L"StatusOverride") == 0) {
+            OverrideDefaultOnlineStatus();
         }
     }
 
@@ -999,7 +1034,7 @@ namespace {
                     wcscpy(packet.location, quest->location);
                     wcscpy(packet.name, quest->name);
                     wcscpy(packet.npc, quest->npc);
-                    GW::StoC::EmulatePacket(&packet);
+                    GW::StoC::EmulatePacket(&packet); // Why? Can we not send more ui messages if thats the need?
                     GW::QuestMgr::SetActiveQuestId(quest->quest_id);
                 }
 
@@ -1076,14 +1111,110 @@ namespace {
         return p && p->party_leader && *p->party_leader ? p->party_leader : nullptr;
     }
 
-    GW::HookEntry OnPostUIMessage_HookEntry;
-    void OnPostUIMessage(GW::HookStatus*, GW::UI::UIMessage message_id, void* wParam, void*) {
+
+    bool mission_prompted = false;
+
+    // We've just asked the game to enter mission; check (and prompt) if we should really be in NM or HM instead
+    void CheckPromptBeforeEnterMission(GW::HookStatus* status) {
+        if (mission_prompted || GW::PartyMgr::GetPartyPlayerCount() > 1)
+            return;
+        const auto player_name = GW::AccountMgr::GetCurrentPlayerName();
+        const auto map_id = GW::Map::GetMapID();
+        const auto nm_complete = CompletionWindow::IsAreaComplete(player_name, map_id, CompletionCheck::NormalMode);
+        const auto hm_complete = CompletionWindow::IsAreaComplete(player_name, map_id, CompletionCheck::HardMode);
+
+        auto on_enter_mission_prompt = [](bool result, void*) {
+            mission_prompted = true;
+            if (result) {
+                // User want to change mode
+                GW::PartyMgr::SetHardMode(!GW::PartyMgr::GetIsPartyInHardMode());
+            }
+            };
+        const char* confirm_text = nullptr;
+        if (GW::PartyMgr::GetIsPartyInHardMode() && hm_complete && !nm_complete) {
+            confirm_text = "You're about to enter a mission in Hard Mode,\nbut you've already completed it on this character.\n\nWould you like to switch to Normal Mode?";
+        }
+        if (!GW::PartyMgr::GetIsPartyInHardMode() && GW::PartyMgr::GetIsHardModeUnlocked() && nm_complete && !hm_complete) {
+            confirm_text = "You're about to enter a mission in Normal Mode,\nbut you've already completed it on this character.\n\nWould you like to switch to Hard Mode?";
+        }
+        if (confirm_text) {
+            ImGui::ConfirmDialog(confirm_text, on_enter_mission_prompt);
+
+            // TODO: Re-enable the clicked dialog button if it was triggered via talking to NPC
+            DialogModule::ReloadDialog();
+            status->blocked = true;
+        }
+    }
+
+    GW::HookEntry OnPreUIMessage_HookEntry;
+    void OnPreUIMessage(GW::HookStatus* status, GW::UI::UIMessage message_id, void* wParam, void*) {
         switch (message_id) {
+        case GW::UI::UIMessage::kSendCallTarget: {
+            auto packet = (GW::UI::UIPacket::kSendCallTarget*)wParam;
+            const auto agent = static_cast<GW::AgentLiving*>(GW::Agents::GetAgentByID(packet->agent_id));
+            if (packet->call_type == GW::CallTargetType::Following && agent
+                && agent->GetIsLivingType() && agent->allegiance == GW::Constants::Allegiance::Enemy) {
+                packet->call_type = GW::CallTargetType::AttackingOrTargetting;
+            }
+        } break;
+        case GW::UI::UIMessage::kMapLoaded: {
+            mission_prompted = false;
+        } break;
+        case GW::UI::UIMessage::kSendAgentDialog: {
+            const auto dialog_id = (uint32_t)wParam;
+            const auto& buttons = DialogModule::GetDialogButtons();
+            const auto button = std::ranges::find_if(buttons, [dialog_id](GW::UI::DialogButtonInfo* btn) {
+                return btn->dialog_id == dialog_id && btn->message && wcscmp(btn->message, L"\x8101\x13D5\x8B48\xD2EF\x7E5A") == 0;
+                });
+            if (button == buttons.end())
+                break;
+            CheckPromptBeforeEnterMission(status);
+            if (status->blocked) {
+                DialogModule::ReloadDialog();
+            }
+        } break;
+        case GW::UI::UIMessage::kSendEnterMission: {
+            CheckPromptBeforeEnterMission(status);
+            if (status->blocked) {
+                // Re-enable the enter mission button if triggered via party window
+                uint32_t packet = 0;
+                GW::UI::SendUIMessage((GW::UI::UIMessage)0x10000128, &packet);
+            }
+            break;
+        }
+        }
+    }
+
+    GW::HookEntry OnPostUIMessage_HookEntry;
+    void OnPostUIMessage(GW::HookStatus* status, GW::UI::UIMessage message_id, void* wParam, void*) {
+        if (status->blocked)
+            return;
+        switch (message_id) {
+        case GW::UI::UIMessage::kTradeSessionStart: {
+            if (flash_window_on_trade) {
+                FlashWindow();
+            }
+            if (focus_window_on_trade) {
+                FocusWindow();
+            }
+        } break;
         case GW::UI::UIMessage::kPartySearchInviteSent: {
             // Automatically send a party window invite when a party search invite is sent
             const auto packet = (GW::UI::UIPacket::kPartySearchInvite*)wParam;
             if(GW::PartyMgr::GetIsLeader())
                 GW::PartyMgr::InvitePlayer(GetPartySearchLeader(packet->source_party_search_id));            
+        } break;
+        case GW::UI::UIMessage::kPreferenceValueChanged: {
+            const auto packet = (GW::UI::UIPacket::kPreferenceValueChanged*)wParam;
+            if (packet->preference_id == GW::UI::NumberPreference::TextLanguage)
+                FontLoader::LoadFonts(true);
+        } break;
+        case GW::UI::UIMessage::kPartyDefeated: {
+            if (auto_return_on_defeat && GW::PartyMgr::GetIsLeader() && !GW::PartyMgr::ReturnToOutpost())
+                Log::Warning("Failed to return to outpost");
+        } break;
+        case GW::UI::UIMessage::kMapLoaded: {
+            last_online_status = static_cast<uint32_t>(GW::FriendListMgr::GetMyStatus());
         } break;
         }
     }
@@ -1287,6 +1418,7 @@ void GameSettings::Initialize()
     uintptr_t address = GW::Scanner::Find("\xEB\x17\x33\xD2\x8D\x4A\x06\xEB", "xxxxxxxx", -4);
     printf("[SCAN] StoragePatch = %p\n", (void*)address);
 
+
     // Xunlai Chest has a behavior where if you
     // 1. Open chest on page 1 to 14
     // 2. Close chest & open it again
@@ -1325,9 +1457,11 @@ void GameSettings::Initialize()
 
     // Call our CreateCodedTextLabel function instead of default CreateCodedTextLabel for patching skill descriptions
     address = GW::Scanner::FindAssertion("p:\\code\\gw\\ui\\game\\gmtipskill.cpp", "!(m_tipSkillFlags & TipSkillMsgCreate::FLAG_SHOW_ENABLE_AI_HINT)", 0x7b);
-    CreateEncodedTextLabel_Func = (CreateCodedTextLabel_pt)GW::Scanner::FunctionFromNearCall(address);
-    skill_description_patch.SetRedirect(address, CreateCodedTextLabel_SkillDescription);
-    skill_description_patch.TogglePatch(true);
+    if (address) {
+        CreateEncodedTextLabel_Func = (CreateCodedTextLabel_pt)GW::Scanner::FunctionFromNearCall(address);
+        skill_description_patch.SetRedirect(address, CreateCodedTextLabel_SkillDescription);
+        skill_description_patch.TogglePatch(true);
+    }
 
     // See OnAgentAllegianceChanged
     address = GW::Scanner::Find("\x75\x18\x81\xce\x00\x00\x00\x02\x56", "xxxxxxxxx", 0x9);
@@ -1345,10 +1479,31 @@ void GameSettings::Initialize()
     printf("[SCAN] ShowAgentFactionGain_Func = %p\n", (void*)ShowAgentFactionGain_Func);
     printf("[SCAN] ShowAgentExperienceGain_Func = %p\n", (void*)ShowAgentExperienceGain_Func);
 
+    FadeFrameContent_Func = (FadeFrameContent_pt)GW::Scanner::FindAssertion("p:\\code\\engine\\frame\\frapi.cpp", "sourceOpacity >= 0", -0x46);
+    printf("[SCAN] FadeFrameContent_Func = %p\n", (void*)FadeFrameContent_Func);
+
+#ifdef _DEBUG
+    ASSERT(ctrl_click_patch.IsValid());
+    ASSERT(tome_patch.IsValid());
+    ASSERT(skip_map_entry_message_patch.IsValid());
+    ASSERT(gold_confirm_patch.IsValid());
+    ASSERT(remove_skill_warmup_duration_patch.IsValid());
+    ASSERT(CreateEncodedTextLabel_Func);
+    ASSERT(skill_description_patch.IsValid());
+    ASSERT(SetGlobalNameTagVisibility_Func);
+    ASSERT(GlobalNameTagVisibilityFlags);
+    ASSERT(ShowAgentFactionGain_Func);
+    ASSERT(ShowAgentExperienceGain_Func);
+    ASSERT(FadeFrameContent_Func);
+#endif
+
+
     GW::HookBase::CreateHook((void**)&ShowAgentFactionGain_Func, OnShowAgentFactionGain, reinterpret_cast<void**>(&ShowAgentFactionGain_Ret));
     GW::HookBase::EnableHooks(ShowAgentFactionGain_Func);
     GW::HookBase::CreateHook((void**)&ShowAgentExperienceGain_Func, OnShowAgentExperienceGain, reinterpret_cast<void**>(&ShowAgentExperienceGain_Ret));
     GW::HookBase::EnableHooks(ShowAgentExperienceGain_Func);
+    GW::HookBase::CreateHook((void**)&FadeFrameContent_Func, OnFadeFrameContent, reinterpret_cast<void**>(&FadeFrameContent_Ret));
+    GW::HookBase::EnableHooks(FadeFrameContent_Func);
 
     RegisterUIMessageCallback(&OnDialog_Entry, GW::UI::UIMessage::kSendAgentDialog, bind_member(this, &GameSettings::OnFactionDonate));
     RegisterUIMessageCallback(&OnDialog_Entry, GW::UI::UIMessage::kSendLoadSkillbar, &OnPreLoadSkillBar);
@@ -1356,7 +1511,7 @@ void GameSettings::Initialize()
     GW::StoC::RegisterPacketCallback(&OnDialog_Entry, GAME_SMSG_SKILL_UPDATE_SKILL_COUNT_1, OnUpdateSkillCount, -0x3000);
     GW::StoC::RegisterPacketCallback(&OnDialog_Entry, GAME_SMSG_SKILL_UPDATE_SKILL_COUNT_2, OnUpdateSkillCount, -0x3000);
 
-    GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::PartyDefeated>(&PartyDefeated_Entry, &GameSettings::OnPartyDefeated);
+    //GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::PartyDefeated>(&PartyDefeated_Entry, &GameSettings::OnPartyDefeated);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::GenericValue>(&PartyDefeated_Entry, [this](GW::HookStatus* status, GW::Packet::StoC::GenericValue* packet) {
         switch (packet->value_id) {
             case 11:
@@ -1378,7 +1533,6 @@ void GameSettings::Initialize()
         if (false && !GW::Agents::GetAgentByID(packet->agent_id))
             status->blocked = true;
         });*/
-    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::TradeStart>(&TradeStart_Entry, OnTradeStarted);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PlayEffect>(&TradeStart_Entry, OnPlayEffect);
     GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::PartyInviteReceived_Create>(&PartyPlayerAdd_Entry, OnPartyInviteReceived);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::PartyPlayerAdd>(&PartyPlayerAdd_Entry, bind_member(this, &GameSettings::OnPartyPlayerJoined));
@@ -1436,8 +1590,22 @@ void GameSettings::Initialize()
         RegisterUIMessageCallback(&OnPostSendDialog_Entry, message_id, OnPartyTargetChanged, 0x8000);
     }
 
+    constexpr GW::UI::UIMessage pre_ui_messages[] = {
+        GW::UI::UIMessage::kSendCallTarget,
+        GW::UI::UIMessage::kSendEnterMission,
+        GW::UI::UIMessage::kSendAgentDialog,
+        GW::UI::UIMessage::kMapLoaded
+    };
+    for (const auto message_id : pre_ui_messages) {
+        RegisterUIMessageCallback(&OnPreUIMessage_HookEntry, message_id, OnPreUIMessage, -0x8000);
+    }
+
     constexpr GW::UI::UIMessage post_ui_messages[] = {
-        GW::UI::UIMessage::kPartySearchInviteSent
+        GW::UI::UIMessage::kPartySearchInviteSent,
+        GW::UI::UIMessage::kPreferenceValueChanged,
+        GW::UI::UIMessage::kMapLoaded,
+        GW::UI::UIMessage::kTradeSessionStart,
+        GW::UI::UIMessage::kPartyDefeated
     };
     for (const auto message_id : post_ui_messages) {
         RegisterUIMessageCallback(&OnPostUIMessage_HookEntry, message_id, OnPostUIMessage, 0x8000);
@@ -1458,6 +1626,8 @@ void GameSettings::Initialize()
         RegisterUIMessageCallback(&OnQuestUIMessage_HookEntry, message_id, OnPostQuestUIMessage, 0x8000);
     }
     player_requested_active_quest_id = GW::QuestMgr::GetActiveQuestId();
+
+    last_online_status = static_cast<uint32_t>(GW::FriendListMgr::GetMyStatus());
 
 #ifdef APRIL_FOOLS
     AF::ApplyPatchesIfItsTime();
@@ -1524,7 +1694,7 @@ void GameSettings::MessageOnPartyChange()
             if (!found) {
                 wchar_t buffer[128];
                 swprintf(buffer, 128, L"<a=1>%ls</a> joined the party.", current_party_names[i].c_str());
-                WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, buffer);
+                WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, buffer, nullptr, true);
             }
         }
     }
@@ -1541,7 +1711,7 @@ void GameSettings::MessageOnPartyChange()
             if (!found) {
                 wchar_t buffer[128];
                 swprintf(buffer, 128, L"<a=1>%ls</a> left the party.", previous_party_names[i].c_str());
-                WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, buffer);
+                WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, buffer, nullptr, true);
             }
         }
     }
@@ -1553,6 +1723,8 @@ void GameSettings::MessageOnPartyChange()
 void GameSettings::LoadSettings(ToolboxIni* ini)
 {
     ToolboxModule::LoadSettings(ini);
+
+    LOAD_BOOL(skip_fade_animations);
 
     LOAD_BOOL(disable_camera_smoothing);
     LOAD_BOOL(tick_is_toggle);
@@ -1585,6 +1757,8 @@ void GameSettings::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(stop_screen_shake);
 
     LOAD_BOOL(disable_gold_selling_confirmation);
+    LOAD_BOOL(collectors_edition_emotes);
+
     LOAD_BOOL(notify_when_friends_online);
     LOAD_BOOL(notify_when_friends_offline);
     LOAD_BOOL(notify_when_friends_join_outpost);
@@ -1650,6 +1824,8 @@ void GameSettings::LoadSettings(ToolboxIni* ini)
 
     LOAD_BOOL(automatically_flag_pet_to_fight_called_target);
 
+    LOAD_UINT(last_online_status);
+
     GW::PartyMgr::SetTickToggle(tick_is_toggle);
     SetWindowTitle(set_window_title_as_charname);
 
@@ -1707,18 +1883,23 @@ void GameSettings::Terminate()
 
     GW::UI::RemoveUIMessageCallback(&OnQuestUIMessage_HookEntry);
     GW::UI::RemoveUIMessageCallback(&OnPostUIMessage_HookEntry);
+    GW::UI::RemoveUIMessageCallback(&OnPreUIMessage_HookEntry);
+    if(FadeFrameContent_Func)
+        GW::Hook::RemoveHook(FadeFrameContent_Func);
 }
 
 void GameSettings::SaveSettings(ToolboxIni* ini)
 {
     ToolboxModule::SaveSettings(ini);
 
+    SAVE_BOOL(skip_fade_animations);
+
     SAVE_BOOL(tick_is_toggle);
 
     SAVE_BOOL(disable_camera_smoothing);
     SAVE_BOOL(auto_return_on_defeat);
-    SAVE_BOOL(shorthand_item_ping);
 
+    SAVE_BOOL(shorthand_item_ping);
     SAVE_BOOL(move_item_on_ctrl_click);
     SAVE_BOOL(move_item_to_current_storage_pane);
     SAVE_BOOL(move_materials_to_current_storage_pane);
@@ -1743,7 +1924,9 @@ void GameSettings::SaveSettings(ToolboxIni* ini)
 
     SAVE_BOOL(faction_warn_percent);
     SAVE_UINT(faction_warn_percent_amount);
+
     SAVE_BOOL(disable_gold_selling_confirmation);
+    SAVE_BOOL(collectors_edition_emotes);
 
     SAVE_BOOL(notify_when_friends_online);
     SAVE_BOOL(notify_when_friends_offline);
@@ -1789,6 +1972,8 @@ void GameSettings::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(disable_skill_descriptions_in_explorable);
 
     SAVE_BOOL(block_enter_area_message);
+
+    SAVE_UINT(last_online_status);
 
     SaveChannelColor(ini, Name(), "local", GW::Chat::Channel::CHANNEL_ALL);
     SaveChannelColor(ini, Name(), "guild", GW::Chat::Channel::CHANNEL_GUILD);
@@ -1837,6 +2022,7 @@ void GameSettings::DrawInventorySettings()
     ImGui::TextDisabled(logic);
     ImGui::Unindent();
     ImGui::Unindent();
+
     ImGui::Checkbox("Shorthand item description on weapon ping", &shorthand_item_ping);
     ImGui::ShowHelp("Include a concise description of your equipped weapon when ctrl+clicking a weapon set");
 
@@ -1872,6 +2058,7 @@ void GameSettings::DrawPartySettings()
 void GameSettings::DrawSettingsInternal()
 {
     ImGui::Checkbox("Hide email address on login screen", &hide_email_address);
+    ImGui::Checkbox("Remember my online status when returning to character select screen", &remember_online_status);
     ImGui::Checkbox("Automatic /age on vanquish", &auto_age_on_vanquish);
     ImGui::ShowHelp("As soon as a vanquish is complete, send /age command to game server to receive server-side completion time.");
     ImGui::Checkbox("Automatic /age2 on /age", &auto_age2_on_age);
@@ -1897,6 +2084,8 @@ void GameSettings::DrawSettingsInternal()
         remove_skill_warmup_duration_patch.TogglePatch(remove_min_skill_warmup_duration);
     }
     ImGui::Checkbox("Disable camera smoothing", &disable_camera_smoothing);
+
+    ImGui::Checkbox("Disable loading screen fade animation", &skip_fade_animations);
 
     ImGui::Checkbox("Automatically skip cinematics", &auto_skip_cinematic);
     ImGui::Checkbox("Automatically return to outpost on defeat", &auto_return_on_defeat);
@@ -1930,7 +2119,17 @@ void GameSettings::DrawSettingsInternal()
     ImGui::Checkbox("Auto use available keys when interacting with locked chest", &auto_open_locked_chest_with_key);
     ImGui::Checkbox("Auto use lockpick when interacting with locked chest", &auto_open_locked_chest);
     ImGui::Checkbox("Keep current quest when accepting a new one", &keep_current_quest_when_new_quest_added);
+    ImGui::Checkbox("Block sparkle effect on dropped items", &block_sparkly_drops_effect);
+    ImGui::ShowHelp("Applies to drops that appear after this setting has been changed");
+    ImGui::Checkbox("Limit signet of capture to 10 in skills window", &limit_signets_of_capture);
+    ImGui::ShowHelp("If your character has purchased more than 10 signets of capture, only show 10 of them in the skills window");
+    if (ImGui::Checkbox("Block full screen message when entering a new area", &block_enter_area_message)) {
+        skip_map_entry_message_patch.TogglePatch(block_enter_area_message);
+    }
+    char buf[64] = "None";
+    ImGui::ChooseKey("Hold key to toggle mouse walk:", buf, _countof(buf), &toggle_mouse_walk_key);
 
+    ImGui::NewLine();
     ImGui::Text("Block floating numbers above character when:");
     ImGui::Indent();
     ImGui::StartSpacedElements(checkbox_w);
@@ -1941,6 +2140,8 @@ void GameSettings::DrawSettingsInternal()
     ImGui::NextSpacedElement();
     ImGui::Checkbox("Gaining 0 experience", &block_zero_experience_gain);
     ImGui::Unindent();
+
+    ImGui::NewLine();
     ImGui::Text("Disable animation and sound from consumables:");
     ImGui::Indent();
     ImGui::StartSpacedElements(checkbox_w);
@@ -1966,10 +2167,7 @@ void GameSettings::DrawSettingsInternal()
     ImGui::ShowHelp("Also applies to ghost-in-the-boxes that you use");
 #endif
     ImGui::Unindent();
-    ImGui::Checkbox("Block sparkle effect on dropped items", &block_sparkly_drops_effect);
-    ImGui::ShowHelp("Applies to drops that appear after this setting has been changed");
-    ImGui::Checkbox("Limit signet of capture to 10 in skills window", &limit_signets_of_capture);
-    ImGui::ShowHelp("If your character has purchased more than 10 signets of capture, only show 10 of them in the skills window");
+    ImGui::NewLine();
     ImGui::Text("In-game name tag colors:");
     ImGui::Indent();
     ImGui::StartSpacedElements(checkbox_w);
@@ -1990,6 +2188,7 @@ void GameSettings::DrawSettingsInternal()
     Colors::DrawSettingHueWheel("Item", &nametag_color_item, flags);
     ImGui::Unindent();
 
+    ImGui::NewLine();
     ImGui::Text("Hide skill descriptions in:");
     ImGui::ShowHelp("When hovering a skill in the game,\nonly show the skill name  and cooldown etc in the tooltip that appears.");
     ImGui::Indent();
@@ -2002,11 +2201,6 @@ void GameSettings::DrawSettingsInternal()
         ImGui::Unindent();
     }
     ImGui::Unindent();
-    if (ImGui::Checkbox("Block full screen message when entering a new area", &block_enter_area_message)) {
-        skip_map_entry_message_patch.TogglePatch(block_enter_area_message);
-    }
-    char buf[64] = "None";
-    ImGui::ChooseKey("Hold key to toggle mouse walk:",buf,_countof(buf), &toggle_mouse_walk_key);
 }
 
 void GameSettings::FactionEarnedCheckAndWarn()
@@ -2180,12 +2374,12 @@ void GameSettings::OnPlayerJoinInstance(GW::HookStatus*, GW::Packet::StoC::Playe
     }
     if (notify_when_friends_join_outpost) {
         if (const auto f = GetFriend(nullptr, pak->player_name, GW::FriendType::Friend, GW::FriendStatus::Online)) {
-            WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, std::format(L"<a=1>{}</a> ({}) entered the outpost.", f->charname, f->alias).c_str());
+            WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, std::format(L"<a=1>{}</a> ({}) entered the outpost.", f->charname, f->alias).c_str(), nullptr, true);
             return;
         }
     }
     if (notify_when_players_join_outpost) {
-        WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, std::format(L"<a=1>{}</a> entered the outpost.", pak->player_name).c_str());
+        WriteChat(GW::Chat::Channel::CHANNEL_GLOBAL, std::format(L"<a=1>{}</a> entered the outpost.", pak->player_name).c_str(), nullptr, true);
     }
 }
 
@@ -2352,10 +2546,7 @@ void GameSettings::OnPlayerLeaveInstance(GW::HookStatus*, const GW::Packet::StoC
 // Automatically return to outpost on defeat
 void GameSettings::OnPartyDefeated(const GW::HookStatus*, GW::Packet::StoC::PartyDefeated*)
 {
-    if (!auto_return_on_defeat || !GW::PartyMgr::GetIsLeader()) {
-        return;
-    }
-    GW::PartyMgr::ReturnToOutpost();
+
 }
 
 // Automatically send /age2 on /age.
@@ -2385,20 +2576,6 @@ void GameSettings::OnDungeonReward(GW::HookStatus* status, GW::Packet::StoC::Dun
 {
     if (hide_dungeon_chest_popup) {
         status->blocked = true;
-    }
-}
-
-// Flash/focus window on trade
-void GameSettings::OnTradeStarted(GW::HookStatus* status, GW::Packet::StoC::TradeStart*)
-{
-    if (status->blocked) {
-        return;
-    }
-    if (flash_window_on_trade) {
-        FlashWindow();
-    }
-    if (focus_window_on_trade) {
-        FocusWindow();
     }
 }
 
@@ -2511,7 +2688,7 @@ void GameSettings::OnAgentStartCast(GW::HookStatus*, GW::UI::UIMessage, void* wP
 // Redirect /wiki commands to go to useful pages
 void GameSettings::OnOpenWiki(GW::HookStatus* status, const GW::UI::UIMessage message_id, void* wParam, void*)
 {
-    const std::string url = ToLower(static_cast<char*>(wParam));
+    const std::string url = TextUtils::ToLower(static_cast<char*>(wParam));
     if (strstr(url.c_str(), "/wiki/main_page")) {
         // Redirect /wiki to /wiki <current map name>
         status->blocked = true;

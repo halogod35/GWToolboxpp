@@ -19,10 +19,9 @@
 #include <Modules/Resources.h>
 #include <Widgets/Minimap/CustomRenderer.h>
 #include <Widgets/Minimap/Minimap.h>
-
 #include <Color.h>
-
-#include "GWToolbox.h"
+#include <GWToolbox.h>
+#include <Utils/TextUtils.h>
 
 using namespace std::string_literals;
 
@@ -32,42 +31,37 @@ namespace {
     ToolboxIni inifile{};
 }
 
-CustomRenderer::CustomLine::CustomLine(const float x1, const float y1, const float x2, const float y2, const GW::Constants::MapID m, const char* n)
-    : p1(x1, y1),
-      p2(x2, y2),
-      map(m)
+CustomRenderer::CustomLine::CustomLine(const float x1, const float y1, const float x2, const float y2, const GW::Constants::MapID m, const char* _name, bool draw_everywhere)
+    : p1(x1, y1, 0),
+      p2(x2, y2, 0),
+      map(m),
+      draw_everywhere(draw_everywhere)
 {
-    if (n) {
-        GuiUtils::StrCopy(name, n, sizeof(name));
-    }
-    else {
-        GuiUtils::StrCopy(name, "line", sizeof(name));
-    }
-};
+    std::snprintf(name, sizeof(name), "%s", _name ? _name : "line");
+}
+
+CustomRenderer::CustomLine::CustomLine(GW::GamePos p1, GW::GamePos p2, GW::Constants::MapID m, const char* n, bool draw_everywhere)
+    : p1(p1),
+      p2(p2),
+      map(m),
+      draw_everywhere(draw_everywhere)
+{
+    std::snprintf(name, sizeof(name), "%s", n ? n : "line");
+}
 
 CustomRenderer::CustomMarker::CustomMarker(const float x, const float y, const float s, const Shape sh, const GW::Constants::MapID m, const char* _name)
-    : pos(x, y),
+    : pos(x, y, 0),
       size(s),
       shape(sh),
       map(m)
 {
-    if (_name) {
-        GuiUtils::StrCopy(name, _name, sizeof(name));
-    }
-    else {
-        GuiUtils::StrCopy(name, "marker", sizeof(name));
-    }
+    std::snprintf(name, sizeof(name), "%s", _name ? _name : "marker");
 }
 
-CustomRenderer::CustomPolygon::CustomPolygon(const GW::Constants::MapID m, const char* n)
+CustomRenderer::CustomPolygon::CustomPolygon(const GW::Constants::MapID m, const char* _name)
     : map(m)
 {
-    if (n) {
-        GuiUtils::StrCopy(name, n, sizeof name);
-    }
-    else {
-        GuiUtils::StrCopy(name, "marker", sizeof name);
-    }
+    std::snprintf(name, sizeof(name), "%s", _name ? _name : "polygon");
 };
 
 void CustomRenderer::LoadSettings(const ToolboxIni* ini, const char* section)
@@ -180,6 +174,8 @@ void CustomRenderer::SaveMarkers()
         // then save
         for (auto i = 0u; i < lines.size(); i++) {
             const CustomLine& line = *lines[i];
+            if (line.created_by_toolbox)
+                continue;
             char section[32];
             snprintf(section, 32, "customline%03d", i);
             inifile.SetValue(section, "name", line.name);
@@ -257,27 +253,29 @@ void CustomRenderer::SetTooltipMapID(const GW::Constants::MapID& map_id)
         }
     }
     if (!map_id_tooltip.map_name_ws.empty()) {
-        snprintf(map_id_tooltip.tooltip_str, sizeof(map_id_tooltip.tooltip_str), "Map ID (%s)", GuiUtils::WStringToString(map_id_tooltip.map_name_ws).c_str());
+        snprintf(map_id_tooltip.tooltip_str, sizeof(map_id_tooltip.tooltip_str), "Map ID (%s)", TextUtils::WStringToString(map_id_tooltip.map_name_ws).c_str());
         map_id_tooltip.map_name_ws.clear();
     }
     ImGui::SetTooltip(map_id_tooltip.tooltip_str);
 }
 
-bool CustomRenderer::RemoveCustomLine(CustomRenderer::CustomLine* line)
+bool CustomRenderer::RemoveCustomLine(CustomLine* line)
 {
     const auto found = std::ranges::find(lines, line);
     if (found != lines.end()) {
         delete *found;
         lines.erase(found);
+        markers_changed = true;
         return true;
     }
     return false;
 }
 
-CustomRenderer::CustomLine* CustomRenderer::AddCustomLine(const GW::GamePos& from, const GW::GamePos& to)
+CustomRenderer::CustomLine* CustomRenderer::AddCustomLine(const GW::GamePos& from, const GW::GamePos& to, const char* _name, bool draw_everywhere)
 {
-    const auto line = new CustomRenderer::CustomLine(from.x, from.y, to.x, to.y, GW::Map::GetMapID());
+    const auto line = new CustomLine(from, to, GW::Map::GetMapID(), _name, draw_everywhere);
     lines.push_back(line);
+    markers_changed = true;
     return line;
 }
 
@@ -290,6 +288,8 @@ void CustomRenderer::DrawLineSettings()
     ImGui::PushID("lines");
     for (size_t i = 0; i < lines.size(); i++) {
         CustomLine& line = *lines[i];
+        if (line.created_by_toolbox)
+            continue;
         ImGui::PushID(static_cast<int>(i));
         markers_changed |= ImGui::Checkbox("##visible", &line.visible);
         if (ImGui::IsItemHovered()) {
@@ -560,7 +560,7 @@ void CustomRenderer::DrawPolygonSettings()
             ImGui::Indent();
             if (polygon.points.size() < CustomPolygon::max_points && ImGui::Button("Add Polygon Point##add")) {
                 if (const auto player = GW::Agents::GetControlledCharacter()) {
-                    polygon.points.emplace_back(player->pos.x, player->pos.y);
+                    polygon.points.emplace_back(player->pos);
                     polygon_changed = true;
                 }
             }
@@ -633,12 +633,7 @@ void CustomRenderer::DrawSettings()
         ImGui::EndChild();
         ImGui::TreePop();
     }
-    if (markers_changed) {
-        GameWorldRenderer::TriggerSyncAllMarkers();
-        marker_file_dirty = true;
-        markers_changed = false;
-        Invalidate();
-    }
+
 }
 
 void CustomRenderer::Initialize(IDirect3DDevice9* device)
@@ -858,6 +853,14 @@ void CustomRenderer::Render(IDirect3DDevice9* device)
         return;
     }
 
+    if (markers_changed) {
+        GameWorldRenderer::TriggerSyncAllMarkers();
+        marker_file_dirty = true;
+        markers_changed = false;
+        Invalidate();
+        return;
+    }
+
     DrawCustomMarkers(device);
 
     vertices_count = 0;
@@ -911,12 +914,14 @@ void CustomRenderer::DrawCustomMarkers(IDirect3DDevice9* device)
 
 void CustomRenderer::DrawCustomLines(const IDirect3DDevice9*)
 {
-    if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Explorable) {
-        for (const auto line : lines) {
-            if (line->visible && (line->map == GW::Constants::MapID::None || line->map == GW::Map::GetMapID())) {
-                EnqueueVertex(line->p1.x, line->p1.y, line->color);
-                EnqueueVertex(line->p2.x, line->p2.y, line->color);
-            }
+    const auto doa_outpost = GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable && GW::Map::GetMapID() == GW::Constants::MapID::Domain_of_Anguish;
+
+    for (const auto line : lines) {
+        // Draw everywhere besides the DoA outpost. Only draw the lines with draw_everywhere in DoA
+        if (line->visible && line->draw_on_minimap && (line->map == GW::Constants::MapID::None || line->map == GW::Map::GetMapID()) &&
+            (!doa_outpost || line->draw_everywhere)) {
+            EnqueueVertex(line->p1.x, line->p1.y, line->color);
+            EnqueueVertex(line->p2.x, line->p2.y, line->color);
         }
     }
 }

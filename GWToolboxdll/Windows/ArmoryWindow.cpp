@@ -11,12 +11,14 @@
 
 #include <GWCA/Managers/AgentMgr.h>
 #include <GWCA/Managers/ItemMgr.h>
+#include <GWCA/Managers/MapMgr.h>
+
+#include <Modules/GwDatTextureModule.h>
 
 #include <Windows/ArmoryWindow_Constants.h>
 #include <Windows/ArmoryWindow.h>
 #include <ImGuiAddons.h>
 #include <ToolboxWindow.h>
-#include <Modules/GwDatTextureModule.h>
 
 namespace GWArmory {
 
@@ -122,7 +124,7 @@ namespace GWArmory {
     EquipmentSlotAction_pt UndrawAgentEquipment_Ret = nullptr;
 
     bool gwarmory_setitem = false;
-    bool pending_reset_equipment = false;
+    bool pending_reset_equipment = true;
 
     bool Reset();
 
@@ -544,6 +546,8 @@ namespace GWArmory {
         const auto slot = GetSlotFromItemType(piece->type);
         // If its a weapon, figure out if we need to clear left or right hand
         if (IsWeapon(piece->type)) {
+            if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable)
+                return;
             if (IsBothHands(piece->type)) {
                 ClearArmorItem(ItemSlot::LeftHand);
                 ClearArmorItem(ItemSlot::RightHand);
@@ -589,6 +593,10 @@ namespace GWArmory {
         const auto player_equip = GetPlayerEquipment();
         if (equip != player_equip) {
             return;
+        }
+        if (GetPlayerProfession() != current_profession) {
+            memset(original_armor_pieces, 0, sizeof(original_armor_pieces));
+            pending_reset_equipment = true;
         }
 
         drawn_pieces[equipment_slot] = equip->items[equipment_slot];
@@ -900,10 +908,6 @@ void ArmoryWindow::Draw(IDirect3DDevice9*)
     if (!visible) {
         return;
     }
-    if (GetPlayerProfession() != current_profession) {
-        pending_reset_equipment = true;
-    }
-
     if (pending_reset_equipment && Reset()) {
         pending_reset_equipment = false;
     }

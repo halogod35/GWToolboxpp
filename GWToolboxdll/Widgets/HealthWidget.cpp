@@ -16,8 +16,10 @@
 #include <Utils/GuiUtils.h>
 #include <Modules/Resources.h>
 #include <Widgets/HealthWidget.h>
+#include <Utils/FontLoader.h>
+#include <Utils/TextUtils.h>
 
-constexpr const wchar_t* HEALTH_THRESHOLD_INIFILENAME = L"HealthThreshold.ini";
+constexpr auto HEALTH_THRESHOLD_INIFILENAME = L"HealthThreshold.ini";
 
 void HealthWidget::LoadSettings(ToolboxIni* ini)
 {
@@ -155,7 +157,7 @@ void HealthWidget::Draw(IDirect3DDevice9*)
     }
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
     ImGui::SetNextWindowSize(ImVec2(150, 100), ImGuiCond_FirstUseEver);
-    const bool ctrl_pressed = ImGui::IsKeyDown(ImGuiKey_ModCtrl);
+    const bool ctrl_pressed = ImGui::IsKeyDown(ImGuiMod_Ctrl);
     if (ImGui::Begin(Name(), nullptr, GetWinFlags(0, !(ctrl_pressed && click_to_print_health)))) {
         constexpr size_t buffer_size = 32;
         static char health_perc[buffer_size];
@@ -218,7 +220,7 @@ void HealthWidget::Draw(IDirect3DDevice9*)
             }
 
             // 'health'
-            ImGui::PushFont(GetFont(GuiUtils::FontSize::header1));
+            ImGui::PushFont(FontLoader::GetFont(FontLoader::FontSize::header1));
             ImVec2 cur = ImGui::GetCursorPos();
             ImGui::SetCursorPos(ImVec2(cur.x + 1, cur.y + 1));
             ImGui::TextColored(background, "Health");
@@ -228,7 +230,7 @@ void HealthWidget::Draw(IDirect3DDevice9*)
 
             // perc
             if (show_perc_value) {
-                ImGui::PushFont(GetFont(GuiUtils::FontSize::widget_small));
+                ImGui::PushFont(FontLoader::GetFont(FontLoader::FontSize::widget_small));
                 cur = ImGui::GetCursorPos();
                 ImGui::SetCursorPos(ImVec2(cur.x + 2, cur.y + 2));
                 ImGui::TextColored(background, "%s", health_perc);
@@ -239,7 +241,7 @@ void HealthWidget::Draw(IDirect3DDevice9*)
 
             // abs
             if (show_abs_value) {
-                ImGui::PushFont(GetFont(GuiUtils::FontSize::widget_label));
+                ImGui::PushFont(FontLoader::GetFont(FontLoader::FontSize::widget_label));
                 cur = ImGui::GetCursorPos();
                 ImGui::SetCursorPos(ImVec2(cur.x + 2, cur.y + 2));
                 ImGui::TextColored(background, health_abs);
@@ -254,7 +256,7 @@ void HealthWidget::Draw(IDirect3DDevice9*)
                         GW::Agents::AsyncGetAgentName(target, agent_name_ping);
                         if (!agent_name_ping.empty()) {
                             char buffer[512];
-                            const std::string agent_name_str = GuiUtils::WStringToString(agent_name_ping);
+                            const std::string agent_name_str = TextUtils::WStringToString(agent_name_ping);
                             const auto current_hp = static_cast<int>(target->hp * target->max_hp);
                             snprintf(buffer, sizeof(buffer), "%s's Health is %d of %d. (%.0f %%)", agent_name_str.c_str(), current_hp, target->max_hp, target->hp * 100.f);
                             GW::Chat::SendChat('#', buffer);
@@ -274,7 +276,8 @@ HealthWidget::Threshold::Threshold(const ToolboxIni* ini, const char* section)
     : ui_id(++cur_ui_id)
 {
     active = ini->GetBoolValue(section, VAR_NAME(active));
-    GuiUtils::StrCopy(name, ini->GetValue(section, VAR_NAME(name), ""), sizeof(name));
+
+    std::snprintf(name, sizeof(name), "%s", ini->GetValue(section, VAR_NAME(name), ""));
     modelId = ini->GetLongValue(section, VAR_NAME(modelId), modelId);
     skillId = ini->GetLongValue(section, VAR_NAME(skillId), skillId);
     mapId = ini->GetLongValue(section, VAR_NAME(mapId), mapId);
@@ -287,7 +290,7 @@ HealthWidget::Threshold::Threshold(const char* _name, const Color _color, const 
     , value(_value)
     , color(_color)
 {
-    GuiUtils::StrCopy(name, _name, sizeof(name));
+    std::snprintf(name, sizeof(name), "%s", _name);
 }
 
 bool HealthWidget::Threshold::DrawHeader()
@@ -316,7 +319,7 @@ bool HealthWidget::Threshold::DrawSettings(Operation& op)
 {
     bool changed = false;
 
-    if (ImGui::TreeNodeEx("##params", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowItemOverlap)) {
+    if (ImGui::TreeNodeEx("##params", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap)) {
         changed |= DrawHeader();
 
         ImGui::PushID(static_cast<int>(ui_id));

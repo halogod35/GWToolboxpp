@@ -9,7 +9,6 @@
 #include <GWCA/GameEntities/Guild.h>
 #include <GWCA/GameEntities/Item.h>
 
-#include <GWCA/Context/GameContext.h>
 #include <GWCA/Context/PartyContext.h>
 #include <GWCA/Context/CharContext.h>
 #include <GWCA/Context/PreGameContext.h>
@@ -35,7 +34,8 @@
 #include <ImGuiAddons.h>
 #include <Utils/GuiUtils.h>
 #include <GWToolbox.h>
-
+#include <Utils/ToolboxUtils.h>
+#include <Utils/TextUtils.h>
 
 namespace {
 
@@ -43,41 +43,6 @@ namespace {
     bool rejoin_party_after_rerolling = true;
 
     bool check_available_chars = true;
-
-    // Can find out campaign etc from props array
-    struct AvailableCharacterInfo {
-        /* + h0000 */
-        uint32_t h0000[2];
-        /* + h0008 */
-        uint32_t uuid[4];
-        /* + h0018 */
-        wchar_t player_name[20];
-        /* + h0040 */
-        uint32_t props[17];
-
-        GW::Constants::MapID map_id() const
-        {
-            return static_cast<GW::Constants::MapID>((props[0] & 0xffff0000) >> 16);
-        }
-
-        uint32_t primary() const
-        {
-            return (props[2] & 0x00f00000) >> 20;
-        }
-
-        uint32_t campaign() const
-        {
-            return (props[7] & 0x000f0000) >> 16;
-        }
-
-        uint32_t level() const
-        {
-            return ((props[7] & 0x0ff00000) >> 20) - 64;
-        }
-    };
-
-    static_assert(sizeof(AvailableCharacterInfo) == 0x84);
-    GW::Array<AvailableCharacterInfo>* available_chars_ptr = nullptr;
 
     clock_t reroll_timeout = 0;
     uint32_t char_sort_order = std::numeric_limits<uint32_t>::max();
@@ -105,6 +70,7 @@ namespace {
         None,
         PendingLogout,
         PromptPendingLogout,
+        PromptPendingReply,
         WaitingForCharSelect,
         CheckForCharname,
         NavigateToCharname,
@@ -132,19 +98,6 @@ namespace {
         return c ? c->player_number : 0;
     }
 
-    const wchar_t* GetPlayerName()
-    {
-        const auto c = GW::GetCharContext();
-        return c ? c->player_name : nullptr;
-    }
-
-    const wchar_t* GetAccountEmail()
-    {
-        const auto c = GW::GetCharContext();
-        const auto email = c ? c->player_email : nullptr;
-        return email && *email ? email : nullptr;
-    }
-
     const wchar_t* GetNextPartyLeader()
     {
         const auto player_party = GetPlayerParty();
@@ -161,22 +114,6 @@ namespace {
                 continue;
             }
             return player->name;
-        }
-        return nullptr;
-    }
-
-    std::vector<std::wstring>* GetAvailableChars()
-    {
-        const wchar_t* email = GetAccountEmail();
-        return email ? account_characters[email] : nullptr;
-    }
-
-    AvailableCharacterInfo* GetAvailableCharacter(const wchar_t* name) {
-        if (!available_chars_ptr)
-            return nullptr;
-        for (auto& ac : *available_chars_ptr) {
-            if (wcscmp(ac.player_name, name) == 0)
-                return &ac;
         }
         return nullptr;
     }
@@ -255,7 +192,7 @@ namespace {
 
     std::wstring LowerCaseRemovePunct(const std::wstring& in)
     {
-        return GuiUtils::ToLower(GuiUtils::RemovePunctuation(in));
+        return TextUtils::ToLower(TextUtils::RemovePunctuation(in));
     }
 
     std::vector<std::wstring> exclude_charnames_from_reroll_cmd;
@@ -275,7 +212,7 @@ namespace {
             for (size_t i = 0; i < exclude_charnames_from_reroll_cmd.size(); i++) {
                 auto& excluded = exclude_charnames_from_reroll_cmd[i];
                 ImGui::PushID(i);
-                ImGui::TextUnformatted(GuiUtils::WStringToString(excluded).c_str());
+                ImGui::TextUnformatted(TextUtils::WStringToString(excluded).c_str());
                 ImGui::SameLine();
                 const bool clicked = ImGui::SmallButton("X");
                 ImGui::PopID();
@@ -285,7 +222,7 @@ namespace {
                 }
             }
             if (ImGui::InputText("###add_character_to_exclude", excluded_char_add_buf, _countof(excluded_char_add_buf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                const auto charname_w = GuiUtils::StringToWString(excluded_char_add_buf);
+                const auto charname_w = TextUtils::StringToWString(excluded_char_add_buf);
                 if (charname_w.length() && !IsExcludedFromReroll(charname_w.c_str())) {
                     exclude_charnames_from_reroll_cmd.push_back(LowerCaseRemovePunct(charname_w));
                 }
@@ -325,7 +262,7 @@ namespace {
 
     void RerollFailed(const wchar_t* reason)
     {
-        if (reroll_stage == PromptPendingLogout) {
+        if (reroll_stage < WaitingForCharSelect) {
             reroll_stage = None;
             return;
         }
@@ -352,20 +289,11 @@ namespace {
         failed_message = nullptr;
         char_sort_order = GetPreference(GW::UI::EnumPreference::CharSortOrder);
         SetPreference(GW::UI::EnumPreference::CharSortOrder, std::to_underlying(GW::Constants::Preference::CharSortOrder::Alphabetize));
-        if (!character_name) {
-            return false;
-        }
-        bool found = false;
-        if (available_chars_ptr && available_chars_ptr->valid()) {
-            for (size_t i = 0; !found && i < available_chars_ptr->size(); i++) {
-                found = wcscmp(available_chars_ptr->at(i).player_name, character_name) == 0;
-            }
-        }
-        if (!found) {
+        if (!GW::AccountMgr::GetAvailableCharacter(character_name)) {
             return false;
         }
         wcscpy(reroll_to_player_name, character_name);
-        const wchar_t* player_name = GetPlayerName();
+        const wchar_t* player_name = GW::AccountMgr::GetCurrentPlayerName();
         if (!player_name || wcscmp(player_name, character_name) == 0) {
             return false;
         }
@@ -413,12 +341,12 @@ namespace {
             Log::Error("Incorrect syntax: /reroll [profession|character_name]");
             return;
         }
-        auto available_characters = available_chars_ptr;
+        auto available_characters = GW::AccountMgr::GetAvailableChars();
         if (!available_characters || !available_characters->valid()) {
             Log::Error("Failed to get available characters");
             return;
         }
-        const std::wstring character_or_profession = GuiUtils::ToLower(GetRemainingArgsWstr(message, 1));
+        const std::wstring character_or_profession = TextUtils::ToLower(GetRemainingArgsWstr(message, 1));
         constexpr std::array to_find = {
             L"",
             L"warrior",
@@ -457,7 +385,7 @@ namespace {
             if (IsExcludedFromReroll(player_name)) {
                 continue;
             }
-            if (!wcsstr(GuiUtils::ToLower(player_name).c_str(), character_or_profession.c_str())) {
+            if (!wcsstr(TextUtils::ToLower(player_name).c_str(), character_or_profession.c_str())) {
                 continue;
             }
             Reroll(available_char.player_name, travel_to_same_location_after_rerolling, rejoin_party_after_rerolling);
@@ -484,46 +412,40 @@ namespace {
         }
     }
 
+    void OnRerollPromptReply(bool result, void*) {
+        if (result && reroll_stage == PromptPendingReply) {
+            reroll_stage = PendingLogout;
+        }
+        else {
+            reroll_stage = None;
+        }
+    }
+
 }
 
 void RerollWindow::Draw(IDirect3DDevice9*)
 {
     if (reroll_stage == PromptPendingLogout) {
         if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Explorable) {
-            bool res = false;
-            if (ImGui::ConfirmDialog("You're currently in an explorable area.\nAre you sure you want to change character?", &res)) {
-                if (res) {
-                    reroll_stage = PendingLogout;
-                }
-                else {
-                    reroll_stage = None;
-                }
-            }
+            ImGui::ConfirmDialog("You're currently in an explorable area.\nAre you sure you want to change character?", OnRerollPromptReply);
+            reroll_stage = PromptPendingReply;
             return;
         }
-        const auto char_select_info = GetAvailableCharacter(reroll_to_player_name);
+        const auto char_select_info = GW::AccountMgr::GetAvailableCharacter(reroll_to_player_name);
         if (!char_select_info) {
             RerollFailed(L"Failed to find available character from char select list");
             return;
         }
         const auto reroll_to_player_current_map = char_select_info->map_id();
         if (GWToolbox::ShouldDisableToolbox(reroll_to_player_current_map)) {
-            const auto charname_str = GuiUtils::WStringToString(char_select_info->player_name);
+            const auto charname_str = TextUtils::WStringToString(char_select_info->player_name);
             const auto msg = std::format("{} is currently in {}.\n"
                 "This is an outpost that toolbox won't work in.\n"
                 "You can still swap to this character, but won't automatically travel.\n\n"
                 "Continue?",
                 charname_str, Resources::GetMapName(reroll_to_player_current_map)->string());
-            bool should_continue = false;
-            if (ImGui::ConfirmDialog(msg.c_str(), &should_continue)) {
-                if (should_continue) {
-                    same_map = same_party = false;
-                    reroll_stage = PendingLogout;
-                }
-                else {
-                    reroll_stage = None;
-                }
-            }
+            ImGui::ConfirmDialog(msg.c_str(), OnRerollPromptReply);
+            reroll_stage = PromptPendingReply;
             return;
         }
         reroll_stage = PendingLogout;
@@ -539,6 +461,7 @@ void RerollWindow::Draw(IDirect3DDevice9*)
         return ImGui::End();
     }
 
+    const auto available_chars_ptr = GW::AccountMgr::GetAvailableChars();
     if (!available_chars_ptr || !available_chars_ptr->valid()) {
         ImGui::TextDisabled("Go to character select screen to record available characters");
     }
@@ -555,11 +478,11 @@ void RerollWindow::Draw(IDirect3DDevice9*)
             auto& character = available_chars_ptr->at(i);
             const wchar_t* player_name = character.player_name;
             uint32_t profession = character.primary();
-            buf = GuiUtils::WStringToString(player_name);
+            buf = TextUtils::WStringToString(player_name);
             if (i % 2 != 0) {
                 ImGui::SameLine();
             }
-            const auto is_current_char = wcscmp(character.player_name, GetPlayerName()) == 0;
+            const auto is_current_char = wcscmp(character.player_name, GW::AccountMgr::GetCurrentPlayerName()) == 0;
             if (is_current_char) {
                 ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f, 0.5f, 0.5f, 1.f));
@@ -602,10 +525,7 @@ void RerollWindow::Initialize()
         GW::Hook::EnableHooks(SetOnlineStatus_Func);
     }
 
-    const uintptr_t address = GW::Scanner::Find("\x8b\x35\x00\x00\x00\x00\x57\x69\xF8\x84\x00\x00\x00", "xx????xxxxxxx", 0x2);
-    if (address) {
-        available_chars_ptr = *(GW::Array<AvailableCharacterInfo>**)address;
-    }
+
     GW::Chat::CreateCommand(L"reroll", CmdReroll);
     GW::Chat::CreateCommand(L"rr", CmdReroll);
 
@@ -636,9 +556,23 @@ void RerollWindow::Update(float)
         RerollFailed(L"Reroll timed out");
         return;
     }
+    if (GWToolbox::ShouldDisableToolbox()) {
+        RerollSuccess();
+        return;
+    }
+
     GW::PreGameContext* pgc = GW::GetPreGameContext();
     switch (reroll_stage) {
         case PendingLogout: {
+            const auto char_select_info = GW::AccountMgr::GetAvailableCharacter(reroll_to_player_name);
+            if (!char_select_info) {
+                RerollFailed(L"Failed to find available character from char select list");
+                return;
+            }
+            if (GWToolbox::ShouldDisableToolbox(char_select_info->map_id())) {
+                // If toolbox isn't going to be available in the next map, make sure we don't try to do anything after reroll.
+                same_map = same_party = false;
+            }
             auto packet = GW::UI::UIPacket::kLogout{
                 .unknown = 0, 
                 .character_select = 0
@@ -700,7 +634,7 @@ void RerollWindow::Update(float)
             if (!GetIsMapReady() || GW::Map::GetInstanceType() != GW::Constants::InstanceType::Outpost) {
                 return;
             }
-            const wchar_t* player_name = GetPlayerName();
+            const wchar_t* player_name = GW::AccountMgr::GetCurrentPlayerName();
             if (!player_name || wcscmp(player_name, reroll_to_player_name) != 0) {
                 RerollFailed(L"Wrong character was loaded");
                 return;
@@ -838,7 +772,7 @@ void RerollWindow::LoadSettings(ToolboxIni* ini)
     std::vector<std::string> excluded_charnames_strings;
     GuiUtils::IniToArray(ini->GetValue(Name(), "exclude_charnames_from_reroll_cmd", ""), excluded_charnames_strings, ',');
     for (auto& cstring : excluded_charnames_strings) {
-        auto charname_w = GuiUtils::StringToWString(cstring);
+        auto charname_w = TextUtils::StringToWString(cstring);
         if (charname_w.length() && !IsExcludedFromReroll(charname_w.c_str())) {
             exclude_charnames_from_reroll_cmd.push_back(LowerCaseRemovePunct(charname_w));
         }
@@ -849,10 +783,10 @@ void RerollWindow::SaveSettings(ToolboxIni* ini)
 {
     ToolboxWindow::SaveSettings(ini);
     for (const auto& it : account_characters) {
-        std::string email_s = GuiUtils::WStringToString(it.first);
+        std::string email_s = TextUtils::WStringToString(it.first);
         const auto chars = it.second;
         for (auto it2 = chars->begin(); it2 != chars->end(); ++it2) {
-            std::string charname_s = GuiUtils::WStringToString(*it2);
+            std::string charname_s = TextUtils::WStringToString(*it2);
             if (charname_s.empty()) {
                 continue;
             }
@@ -868,7 +802,7 @@ void RerollWindow::SaveSettings(ToolboxIni* ini)
         if (excluded_charnames_ini.length()) {
             excluded_charnames_ini += ',';
         }
-        excluded_charnames_ini += GuiUtils::WStringToString(excluded);
+        excluded_charnames_ini += TextUtils::WStringToString(excluded);
     }
     ini->SetValue(Name(), "exclude_charnames_from_reroll_cmd", excluded_charnames_ini.c_str());
 }

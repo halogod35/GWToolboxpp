@@ -90,8 +90,14 @@ void SettingsWindow::Draw(IDirect3DDevice9*)
         }
 
         ToolboxSettings::DrawFreezeSetting();
-        ImGui::SameLine();
+        ImGui::NextSpacedElement();
+        ImGui::Checkbox("Send anonymous gameplay stats", &ToolboxSettings::send_anonymous_gameplay_info);
+        ImGui::ShowHelp("Some features of toolbox allow you to contribute to the community\nby sending in-game data to remote websites.\
+        \n\nFeatures that use this info:\
+        \n\t- Sending outpost party information to https://party.gwtoolbox.com");
+        ImGui::NextSpacedElement();
         ImGui::Checkbox("Hide Settings when entering explorable area", &hide_when_entering_explorable);
+
 
         ImGui::Text("General:");
 
@@ -225,7 +231,7 @@ bool SettingsWindow::DrawSettingsSection(const char* section)
     static char buf[128];
     sprintf(buf, "      %s", section);
     const auto pos = ImGui::GetCursorScreenPos();
-    const bool is_showing = ImGui::CollapsingHeader(buf, ImGuiTreeNodeFlags_AllowItemOverlap);
+    const bool is_showing = ImGui::CollapsingHeader(buf, ImGuiTreeNodeFlags_AllowOverlap);
 
     const char* icon = nullptr;
     if (const auto it = icons.find(section); it != icons.end()) {

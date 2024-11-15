@@ -13,13 +13,14 @@
 #include <GWCA/Utilities/Hooker.h>
 
 #include <Defines.h>
+#include <ImGuiAddons.h>
 #include "SkillbarWidget.h"
+#include <Modules/ChatCommands.h>
 
 /*
  * Based off of @JuliusPunhal April skill timer - https://github.com/JuliusPunhal/April-old/blob/master/Source/April/SkillbarOverlay.cpp
  */
 namespace {
-    bool skillbar_pos_stale = true;
     GW::UI::FramePosition skillbar_skill_positions[8];
     ImVec2 skill_positions_calculated[8];
 
@@ -35,27 +36,71 @@ namespace {
     float m_skill_width = 50.f;
     float m_skill_height = 50.f;
 
+    // duration -> color settings
+    int medium_treshold = 5000; // long to medium color
+    int short_treshold = 2500;  // medium to short color
+    Color color_long = Colors::ARGB(50, 0, 255, 0);
+    Color color_medium = Colors::ARGB(50, 255, 255, 0);
+    Color color_short = Colors::ARGB(80, 255, 0, 0);
+
+    // duration -> string settings
+    int decimal_threshold = 600; // when to start displaying decimals
+    bool round_up = true;        // round up or down?
+
+    // Skill overlay settings
+    bool display_skill_overlay = true;
+    std::array font_sizes = {
+        FontLoader::FontSize::text,
+        FontLoader::FontSize::header2,
+        FontLoader::FontSize::header1,
+        FontLoader::FontSize::widget_label,
+        FontLoader::FontSize::widget_small
+    };
+    FontLoader::FontSize font_recharge = FontLoader::FontSize::header1;
+    Color color_text_recharge = Colors::White();
+    Color color_border = Colors::ARGB(100, 255, 255, 255);
+
+    // Effect monitor settings
+    bool display_effect_monitor = false;
+    int effect_monitor_size = 0;
+    int effect_monitor_offset = -100;
+    bool effects_symmetric = true;
+    bool display_multiple_effects = false;
+    bool effects_flip_order = false;
+    bool effects_flip_direction = false;
+    bool effect_text_color = false;
+    bool effect_progress_bar_color = false;
+    FontLoader::FontSize font_effects = FontLoader::FontSize::text;
+    Color color_text_effects = Colors::White();
+    Color color_effect_background = Colors::ARGB(100, 0, 0, 0);
+    Color color_effect_border = Colors::ARGB(255, 0, 0, 0);
+    Color color_effect_progress = Colors::Blue();
+
+
     GW::UI::Frame* skillbar_frame = nullptr;
     bool skillbar_position_dirty = true;
     GW::UI::UIInteractionCallback OnSkillbar_UICallback_Ret = nullptr;
-    void __cdecl OnSkillbar_UICallback(GW::UI::InteractionMessage* message, void* wParam, void* lParam) {
+
+    void __cdecl OnSkillbar_UICallback(GW::UI::InteractionMessage* message, void* wParam, void* lParam)
+    {
         GW::Hook::EnterHook();
         OnSkillbar_UICallback_Ret(message, wParam, lParam);
         switch (static_cast<uint32_t>(message->message_id)) {
-        case 0xb:
-            skillbar_frame = nullptr;
-            skillbar_position_dirty = true;
-            break;
-        case 0x13:
-        case 0x30:
-        case 0x33:
-            skillbar_position_dirty = true; // Forces a recalculation
-            break;
+            case 0xb:
+                skillbar_frame = nullptr;
+                skillbar_position_dirty = true;
+                break;
+            case 0x13:
+            case 0x30:
+            case 0x33:
+                skillbar_position_dirty = true; // Forces a recalculation
+                break;
         }
         GW::Hook::LeaveHook();
     }
 
-    GW::UI::Frame* GetSkillbarFrame() {
+    GW::UI::Frame* GetSkillbarFrame()
+    {
         if (skillbar_frame)
             return skillbar_frame;
         skillbar_frame = GW::UI::GetFrameByLabel(L"Skillbar");
@@ -69,26 +114,32 @@ namespace {
         return skillbar_frame;
     }
 
-    bool GetSkillbarPos() {
+    bool GetSkillbarPos()
+    {
         if (!skillbar_position_dirty)
             return true;
         const auto frame = GetSkillbarFrame();
         if (!(frame && frame->IsVisible() && frame->IsCreated())) {
             return false;
         }
+        if (!GImGui)
+            return false;
+        // Imgui viewport may not be limited to the game area.
+        const auto imgui_viewport = ImGui::GetMainViewport();
+
         for (size_t i = 0; i < _countof(skillbar_skill_positions); i++) {
             const auto skillframe = GW::UI::GetChildFrame(frame, i);
             if (!skillframe)
                 return false;
             skillbar_skill_positions[i] = skillframe->position;
             skill_positions_calculated[i] = skillbar_skill_positions[i].GetTopLeftOnScreen();
+            skill_positions_calculated[i].y += imgui_viewport->Pos.y;
+            skill_positions_calculated[i].x += imgui_viewport->Pos.x;
             if (i == 0) {
                 m_skill_width = skillbar_skill_positions[0].GetSizeOnScreen().x;
                 m_skill_height = skillbar_skill_positions[0].GetSizeOnScreen().y;
             }
         }
-
-        skillbar_pos_stale = false;
 
         // Calculate columns/rows
         if (skillbar_skill_positions[0].screen_top == skillbar_skill_positions[7].screen_top) {
@@ -106,11 +157,20 @@ namespace {
         skillbar_position_dirty = false;
         return true;
     }
+
     GW::HookEntry OnUIMessage_HookEntry;
-    void OnUIMessage(GW::HookStatus*, GW::UI::UIMessage, void*, void*) {
-        skillbar_pos_stale = true;
+
+    void OnUIMessage(GW::HookStatus*, GW::UI::UIMessage, void*, void*)
+    {
+        skillbar_position_dirty = true;
+    }
+
+    ToolboxUIElement& Instance()
+    {
+        return SkillbarWidget::Instance();
     }
 }
+
 void SkillbarWidget::skill_cooldown_to_string(char arr[16], uint32_t cd) const
 {
     if (cd > 1800'000u || cd == 0) {
@@ -239,34 +299,33 @@ void SkillbarWidget::Draw(IDirect3DDevice9*)
     if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Loading) {
         return;
     }
-    if (skillbar_pos_stale && !GetSkillbarPos()) {
+    if (skillbar_position_dirty && !GetSkillbarPos()) {
         return; // Failed to get skillbar pos
     }
 
-    ImGui::PushFont(GetFont(font_recharge));
+    ImGui::PushFont(FontLoader::GetFont(font_recharge));
     ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
 
     ImGui::Begin(Name(), nullptr, GetWinFlags());
+    const auto draw_list = ImGui::GetBackgroundDrawList();
     for (size_t i = 0; i < m_skills.size(); i++) {
         const Skill& skill = m_skills[i];
         // NB: Y axis inverted for imgui
-        const ImVec2 top_left = skillbar_skill_positions[i].GetTopLeftOnScreen();
-        // position of this skill
-
-        const ImVec2 bottom_right = skillbar_skill_positions[i].GetBottomRightOnScreen();
+        const ImVec2& top_left = skill_positions_calculated[i];
+        const ImVec2 bottom_right = {skill_positions_calculated[i].x + m_skill_width, skill_positions_calculated[i].y + m_skill_height};
 
         // draw overlay
         if (display_skill_overlay) {
-            ImGui::GetBackgroundDrawList()->AddRectFilled(top_left, bottom_right, skill.color);
+            draw_list->AddRectFilled(top_left, bottom_right, skill.color);
         }
-        ImGui::GetBackgroundDrawList()->AddRect(top_left, bottom_right, color_border);
+        draw_list->AddRect(top_left, bottom_right, color_border);
 
         // label
         if (*skill.cooldown) {
             const ImVec2 label_size = ImGui::CalcTextSize(skill.cooldown);
             ImVec2 label_pos(top_left.x + m_skill_width / 2 - label_size.x / 2, top_left.y + m_skill_width / 2 - label_size.y / 2);
-            ImGui::GetBackgroundDrawList()->AddText(label_pos, color_text_recharge, skill.cooldown);
+            draw_list->AddText(label_pos, color_text_recharge, skill.cooldown);
         }
 
         if (display_effect_monitor) {
@@ -281,7 +340,7 @@ void SkillbarWidget::Draw(IDirect3DDevice9*)
 
 void SkillbarWidget::DrawEffect(const int skill_idx, const ImVec2& pos) const
 {
-    ImGui::PushFont(GetFont(font_effects));
+    ImGui::PushFont(FontLoader::GetFont(font_effects));
 
     const Skill& skill = m_skills[skill_idx];
 
@@ -393,7 +452,7 @@ void SkillbarWidget::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(round_up);
 
     LOAD_BOOL(display_skill_overlay);
-    font_recharge = static_cast<GuiUtils::FontSize>(ini->GetLongValue(Name(), VAR_NAME(font_recharge), static_cast<long>(font_recharge)));
+    font_recharge = static_cast<FontLoader::FontSize>(ini->GetLongValue(Name(), VAR_NAME(font_recharge), static_cast<long>(font_recharge)));
     LOAD_COLOR(color_text_recharge);
     LOAD_COLOR(color_border);
 
@@ -406,7 +465,7 @@ void SkillbarWidget::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(effects_flip_direction);
     LOAD_BOOL(effect_text_color);
     LOAD_BOOL(effect_progress_bar_color);
-    font_effects = static_cast<GuiUtils::FontSize>(ini->GetLongValue(Name(), VAR_NAME(font_effects), static_cast<long>(font_effects)));
+    font_effects = static_cast<FontLoader::FontSize>(ini->GetLongValue(Name(), VAR_NAME(font_effects), static_cast<long>(font_effects)));
     LOAD_COLOR(color_text_effects);
     LOAD_COLOR(color_effect_background);
     LOAD_COLOR(color_effect_progress);
@@ -488,7 +547,7 @@ void SkillbarWidget::DrawSettingsInternal()
 {
     ToolboxWidget::DrawSettingsInternal();
 
-    constexpr const char* font_sizes[] = {"16", "18", "20", "24", "42", "48"};
+    constexpr const char* font_size_names[] = {"16", "18", "20", "24", "42", "48"};
 
     const bool is_vertical = layout == Layout::Column || layout == Layout::Columns;
 
@@ -497,7 +556,10 @@ void SkillbarWidget::DrawSettingsInternal()
     ImGui::Spacing();
     ImGui::Indent();
     ImGui::PushID("skill_overlay_settings");
-    ImGui::Combo("Text size", reinterpret_cast<int*>(&font_recharge), font_sizes, 6);
+    int current_index = std::distance(font_sizes.begin(), std::ranges::find(font_sizes, font_recharge));
+    if (ImGui::Combo("Text size", &current_index, font_size_names, _countof(font_size_names))) {
+        font_recharge = font_sizes[current_index];
+    }
     Colors::DrawSettingHueWheel("Text color", &color_text_recharge);
     Colors::DrawSettingHueWheel("Border color", &color_border);
     ImGui::Checkbox("Paint skills according to effect duration", &display_skill_overlay);
@@ -546,7 +608,10 @@ void SkillbarWidget::DrawSettingsInternal()
         if (effect_text_color || effect_progress_bar_color) {
             DrawDurationThresholds();
         }
-        ImGui::Combo("Text size", reinterpret_cast<int*>(&font_effects), font_sizes, 6);
+        current_index = std::distance(font_sizes.begin(), std::ranges::find(font_sizes, font_effects));
+        if (ImGui::Combo("Text size", &current_index, font_size_names, _countof(font_size_names))) {
+            font_effects = font_sizes[current_index];
+        }
         if (!effect_text_color) {
             Colors::DrawSettingHueWheel("Text color", &color_text_effects);
         }
@@ -564,8 +629,12 @@ void SkillbarWidget::Initialize()
 {
     ToolboxWidget::Initialize();
     GW::UI::RegisterUIMessageCallback(&OnUIMessage_HookEntry, GW::UI::UIMessage::kUIPositionChanged, OnUIMessage, 0x8000);
-    GW::UI::RegisterUIMessageCallback(&OnUIMessage_HookEntry, GW::UI::UIMessage::kPreferenceChanged, OnUIMessage, 0x8000);
+    GW::UI::RegisterUIMessageCallback(&OnUIMessage_HookEntry, GW::UI::UIMessage::kPreferenceValueChanged, OnUIMessage, 0x8000);
+
+    ChatCommands::RegisterSettingChatCommand(L"skillbar_effects_overlay", &display_effect_monitor, L"Toggles the effect monitor overlay on the skillbar widget");
+    ChatCommands::RegisterSettingChatCommand(L"skillbar_skills_overlay", &display_skill_overlay, L"Toggles the skill monitor overlay on the skillbar widget");
 }
+
 void SkillbarWidget::Terminate()
 {
     ToolboxWidget::Terminate();
@@ -574,6 +643,8 @@ void SkillbarWidget::Terminate()
     if (skillbar_frame && skillbar_frame->frame_callbacks[0] == OnSkillbar_UICallback) {
         skillbar_frame->frame_callbacks[0] = OnSkillbar_UICallback_Ret;
     }
+    ChatCommands::RemoveSettingChatCommand(L"skillbar_effects_overlay");
+    ChatCommands::RemoveSettingChatCommand(L"skillbar_skills_overlay");
 }
 
 Color SkillbarWidget::UptimeToColor(const uint32_t uptime) const

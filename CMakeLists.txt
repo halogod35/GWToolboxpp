@@ -1,13 +1,13 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.29)
 
 set(CMAKE_GENERATOR_PLATFORM win32)
 
 project(gwtoolbox)
 
 set(GWTOOLBOXEXE_VERSION "4.1")
-set(GWTOOLBOXDLL_VERSION "6.22")
+set(GWTOOLBOXDLL_VERSION "6.24")
 set(GWTOOLBOXDLL_VERSION_BETA "") # can be anything. Marks beta version if not empty.
-set(GWTOOLBOX_MODULE_VERSION "6,22,0,0") # used for Dll module info. See GWToolboxdll/GWToolbox.rc
+set(GWTOOLBOX_MODULE_VERSION "6,24,0,0") # used for Dll module info. See GWToolboxdll/GWToolbox.rc
 
 
 if(MSVC_TOOLSET_VERSION LESS 143)
@@ -24,6 +24,7 @@ add_compile_definitions(
     "NOMINMAX"
     "_WIN32_WINNT=_WIN32_WINNT_WIN7"
     "WIN32_LEAN_AND_MEAN"
+    "_HAS_ITERATOR_DEBUGGING=0"
 
     "GWTOOLBOXEXE_VERSION=\"${GWTOOLBOXEXE_VERSION}\""
     "GWTOOLBOXDLL_VERSION=\"${GWTOOLBOXDLL_VERSION}\""
@@ -37,20 +38,27 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
+
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 # Outputs dll, exe, and pdb into a /bin/config folder
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/bin/")
 
 include(gwca)
-include(imgui)
-include(wintoast)
 include(directxtex)
 include(easywsclient)
-include(simpleini)
-include(discord_game_sdk)
+include(imgui)
 include(gwtoolboxdll_plugins)
 include(nativefiledialog)
+include(wintoast)
+
+find_library(GAME_SDK discord_game_sdk)
+find_path(GAME_SDK_INCLUDE discord-game-sdk/discord.h)
+find_path(EARCUT_HPP_INCLUDE_DIRS "mapbox/earcut.hpp")
+find_path(SIMPLEINI_INCLUDE_DIRS "ConvertUTF.c")
+find_package(wolfssl CONFIG REQUIRED)
+find_package(minhook CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 
 add_subdirectory(GWToolboxdll)
 add_subdirectory(Core)

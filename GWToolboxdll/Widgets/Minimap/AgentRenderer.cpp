@@ -268,6 +268,7 @@ void AgentRenderer::SaveSettings(ToolboxIni* ini, const char* section) const
     Colors::Save(ini, section, VAR_NAME(color_ally_spirit), color_ally_spirit);
     Colors::Save(ini, section, VAR_NAME(color_ally_minion), color_ally_minion);
     Colors::Save(ini, section, VAR_NAME(color_ally_dead), color_ally_dead);
+    Colors::Save(ini, section, VAR_NAME(color_marked_target), color_marked_target);
 
     ini->SetDoubleValue(section, VAR_NAME(size_default), size_default);
     ini->SetDoubleValue(section, VAR_NAME(size_player), size_player);
@@ -275,6 +276,7 @@ void AgentRenderer::SaveSettings(ToolboxIni* ini, const char* section) const
     ini->SetDoubleValue(section, VAR_NAME(size_item), size_item);
     ini->SetDoubleValue(section, VAR_NAME(size_boss), size_boss);
     ini->SetDoubleValue(section, VAR_NAME(size_minion), size_minion);
+    ini->SetDoubleValue(section, VAR_NAME(size_marked_target), size_marked_target);
     ini->SetLongValue(section, VAR_NAME(default_shape), default_shape);
     ini->SetLongValue(section, VAR_NAME(agent_border_thickness), agent_border_thickness);
 
@@ -345,10 +347,12 @@ void AgentRenderer::DrawSettings()
     ImGui::Checkbox("Show props on minimap", &show_props_on_minimap);
 #endif
     if (ImGui::TreeNodeEx("Agent Colors", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth)) {
-        bool confirmed = false;
-        if (ImGui::SmallConfirmButton("Restore Defaults", &confirmed, "Are you sure?\nThis will reset all agent sizes to the default values.\nThis operation cannot be undone.\n\n")) {
-            LoadDefaultColors();
-        }
+        ImGui::SmallConfirmButton("Restore Defaults", "Are you sure?\nThis will reset all agent sizes to the default values.\nThis operation cannot be undone.\n\n", 
+            [&](bool result, void*) {
+            if (result) {
+                LoadDefaultColors();
+            }
+            });
         Colors::DrawSettingHueWheel("EoE", &color_eoe);
         ImGui::ShowHelp("This is the color at the edge, the color in the middle is the same, with alpha-50");
         Colors::DrawSettingHueWheel("QZ", &color_qz);
@@ -379,10 +383,12 @@ void AgentRenderer::DrawSettings()
     }
 
     if (ImGui::TreeNodeEx("Agent Sizes", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth)) {
-        bool confirmed = false;
-        if (ImGui::SmallConfirmButton("Restore Defaults", &confirmed, "Are you sure?\nThis will reset all agent sizes to the default values.\nThis operation cannot be undone.\n\n")) {
-            LoadDefaultSizes();
-        }
+        ImGui::SmallConfirmButton("Restore Defaults", "Are you sure?\nThis will reset all agent sizes to the default values.\nThis operation cannot be undone.\n\n",
+            [&](bool result, void*) {
+                if (result) {
+                    LoadDefaultSizes();
+                }
+            });
         ImGui::DragFloat("Default Size", &size_default, 1.0f, 1.0f, 0.0f, "%.0f");
         ImGui::DragFloat("Player Size", &size_player, 1.0f, 1.0f, 0.0f, "%.0f");
         ImGui::DragFloat("Signpost Size", &size_signpost, 1.0f, 1.0f, 0.0f, "%.0f");
@@ -974,8 +980,9 @@ Color AgentRenderer::GetColor(const GW::Agent* agent, const CustomAgent* ca) con
             return (marker.visible && marker.map == GW::Constants::MapID::None || marker.map == GW::Map::GetMapID()) && (marker.color_sub & IM_COL32_A_MASK) != 0 &&
                    GetDistance(living->pos, marker.pos) < 2500.f;
         };
-        const auto is_inside = [](const GW::Vec2f pos, const std::vector<GW::Vec2f>& points) -> bool {
+        const auto is_inside = [](const GW::GamePos pos, const std::vector<GW::GamePos>& points) -> bool {
             bool b = false;
+            //TODO: This might need adjust to take into account zlevels
             for (auto i = 0u, j = points.size() - 1; i < points.size(); j = i++) {
                 if (points[i].y >= pos.y != points[j].y >= pos.y &&
                     pos.x <= (points[j].x - points[i].x) * (pos.y - points[i].y) / (points[j].y - points[i].y) +
@@ -1237,7 +1244,7 @@ void AgentRenderer::Enqueue(const Shape_e shape, const GW::MapProp* agent, const
     const RenderPosition pos = {
         agent->rotation_cos,
         agent->rotation_sin,
-        agent->position
+        {agent->position.x, agent->position.y}
     };
     return Enqueue(shape, pos, size, color);
 }
@@ -1290,7 +1297,7 @@ AgentRenderer::CustomAgent::CustomAgent(const ToolboxIni* ini, const char* secti
     : ui_id(++cur_ui_id)
 {
     active = ini->GetBoolValue(section, VAR_NAME(active), active);
-    GuiUtils::StrCopy(name, ini->GetValue(section, VAR_NAME(name), ""), sizeof(name));
+    std::snprintf(name, sizeof(name), "%s", ini->GetValue(section, VAR_NAME(name), ""));
     modelId = static_cast<DWORD>(ini->GetLongValue(section, VAR_NAME(modelId), static_cast<long>(modelId)));
     mapId = static_cast<DWORD>(ini->GetLongValue(section, VAR_NAME(mapId), static_cast<long>(mapId)));
 
@@ -1315,7 +1322,7 @@ AgentRenderer::CustomAgent::CustomAgent(const DWORD model_id, const Color _color
 {
     modelId = model_id;
     color = _color;
-    GuiUtils::StrCopy(name, _name, sizeof(name));
+    std::snprintf(name, _countof(name), "%s", _name);
     active = true;
 }
 
@@ -1372,7 +1379,7 @@ bool AgentRenderer::CustomAgent::DrawSettings(Operation& op)
 {
     bool changed = false;
 
-    if (ImGui::TreeNodeEx("##params", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowItemOverlap)) {
+    if (ImGui::TreeNodeEx("##params", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap)) {
         ImGui::PushID(static_cast<int>(ui_id));
 
         changed |= DrawHeader();

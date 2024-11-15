@@ -16,9 +16,11 @@
 #include <Defines.h>
 #include "EffectsMonitorWidget.h"
 
+#include "Utils/FontLoader.h"
+
 
 namespace {
-    GuiUtils::FontSize font_effects = GuiUtils::FontSize::header2;
+    auto font_effects = FontLoader::FontSize::header2;
     Color color_text_effects = Colors::White();
     Color color_background = Colors::ARGB(128, 0, 0, 0);
     Color color_text_shadow = Colors::Black();
@@ -48,17 +50,23 @@ namespace {
 
     void DrawTextOverlay(const char* text, const GW::UI::Frame* frame) {
         if (!(frame && text && *text && effects_frame)) return;
-        const auto skill_bottom_right = frame->position.GetBottomRightOnScreen();
+        auto skill_bottom_right = frame->position.GetBottomRightOnScreen();
+
+        const auto viewport = ImGui::GetMainViewport();
+        skill_bottom_right.x += viewport->Pos.x;
+        skill_bottom_right.y += viewport->Pos.y;
+
+        const auto draw_list = ImGui::GetBackgroundDrawList(viewport);
 
         const ImVec2 label_size = ImGui::CalcTextSize(text);
         const ImVec2 label_pos(skill_bottom_right.x - label_size.x, skill_bottom_right.y - label_size.y);
         if ((color_background & IM_COL32_A_MASK) != 0) {
-            ImGui::GetBackgroundDrawList()->AddRectFilled(label_pos, skill_bottom_right, color_background);
+            draw_list->AddRectFilled(label_pos, skill_bottom_right, color_background);
         }
         if ((color_text_shadow & IM_COL32_A_MASK) != 0) {
-            ImGui::GetBackgroundDrawList()->AddText({ label_pos.x + 1, label_pos.y + 1 }, color_text_shadow, text);
+            draw_list->AddText({ label_pos.x + 1, label_pos.y + 1 }, color_text_shadow, text);
         }
-        ImGui::GetBackgroundDrawList()->AddText(label_pos, color_text_effects, text);
+        draw_list->AddText(label_pos, color_text_effects, text);
     }
 
 }
@@ -72,7 +80,7 @@ void EffectsMonitorWidget::Draw(IDirect3DDevice9*)
     if (!effects_frame) {
         return;
     }
-    ImGui::PushFont(GetFont(font_effects));
+    ImGui::PushFont(FontLoader::GetFont(font_effects));
 
     char remaining_str[16];
 
@@ -122,7 +130,7 @@ void EffectsMonitorWidget::LoadSettings(ToolboxIni* ini)
     LOAD_UINT(only_under_seconds);
     LOAD_BOOL(round_up);
     LOAD_BOOL(show_vanquish_counter);
-    font_effects = static_cast<GuiUtils::FontSize>(
+    font_effects = static_cast<FontLoader::FontSize>(
         ini->GetLongValue(Name(), VAR_NAME(font_effects), static_cast<long>(font_effects)));
     LOAD_COLOR(color_text_effects);
     LOAD_COLOR(color_text_shadow);

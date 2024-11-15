@@ -598,8 +598,6 @@ void PartyWindowModule::LoadDefaults()
     AddSpecialNPC({"Pits friendly spirit 3", GW::Constants::ModelID::UW::PitsSoul3, GW::Constants::MapID::The_Underworld});
     AddSpecialNPC({"Pits friendly spirit 4", GW::Constants::ModelID::UW::PitsSoul4, GW::Constants::MapID::The_Underworld});
 
-    AddSpecialNPC({"Gyala Hatchery siege turtle", 3582, GW::Constants::MapID::Gyala_Hatchery_outpost_mission});
-
     AddSpecialNPC({"FoW Griffs", GW::Constants::ModelID::FoW::Griffons, GW::Constants::MapID::The_Fissure_of_Woe});
     AddSpecialNPC({"FoW Forgemaster", GW::Constants::ModelID::FoW::Forgemaster, GW::Constants::MapID::The_Fissure_of_Woe});
 
@@ -608,10 +606,16 @@ void PartyWindowModule::LoadDefaults()
     AddSpecialNPC({"Ice Imp (Polymock)", GW::Constants::ModelID::PolymockSummon::IceImp, GW::Constants::MapID::None});
     AddSpecialNPC({"Naga Shaman (Polymock)", GW::Constants::ModelID::PolymockSummon::NagaShaman, GW::Constants::MapID::None});
 
-    //AddSpecialNPC({ "Ebon Vanguard Assassin", 5848, GW::Constants::MapID::None });
     AddSpecialNPC({"Ebon Vanguard Assassin", GW::Constants::ModelID::EbonVanguardAssassin, GW::Constants::MapID::None});
 
     AddSpecialNPC({"Ben Wolfson Pre-Searing", 1512, GW::Constants::MapID::None});
+
+    // Important NPCs for missions
+    AddSpecialNPC({"Gyala Hatchery siege turtle", 3582, GW::Constants::MapID::Gyala_Hatchery_outpost_mission});
+    AddSpecialNPC({"Rornak Stonesledge (Bonus NPC)", 1559, GW::Constants::MapID::The_Frost_Gate});
+    AddSpecialNPC({"Oink (Bonus NPC)", 1710, GW::Constants::MapID::Gates_of_Kryta});
+    AddSpecialNPC({"Restless Spirit (Bonus NPC)", 1965, GW::Constants::MapID::Sanctum_Cay});
+    AddSpecialNPC({"Captain Besuz (Bonus NPC)", 5271, GW::Constants::MapID::Blacktide_Den});
 }
 
 void PartyWindowModule::DrawSettingsInternal()
@@ -657,7 +661,7 @@ void PartyWindowModule::DrawSettingsInternal()
         const bool clicked = ImGui::Button(" X ");
         ImGui::PopID();
         if (clicked) {
-            Log::Info("Removed special NPC %s (%d)", npc->alias.c_str(), npc->model_id);
+            Log::Flash("Removed special NPC %s (%d)", npc->alias.c_str(), npc->model_id);
             RemoveSpecialNPC(npc->model_id);
             CheckMap();
             break;
@@ -687,7 +691,7 @@ void PartyWindowModule::DrawSettingsInternal()
             return Log::Error("Special NPC %s is already defined for model_id %d", it->second->alias.c_str(), new_npc_model_id);
         }
         AddSpecialNPC({alias_str.c_str(), new_npc_model_id, static_cast<GW::Constants::MapID>(new_npc_map_id)});
-        Log::Info("Added special NPC %s (%d)", alias_str.c_str(), new_npc_model_id);
+        Log::Flash("Added special NPC %s (%d)", alias_str.c_str(), new_npc_model_id);
         CheckMap();
     }
 }

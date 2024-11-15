@@ -21,6 +21,7 @@
 #include <Utils/GuiUtils.h>
 #include <Timer.h>
 #include <Windows/PartyStatisticsWindow.h>
+#include <Utils/TextUtils.h>
 
 /*************************/
 /* Static Helper Methods */
@@ -258,7 +259,7 @@ namespace {
                 snprintf(button_name, _countof(button_name), "###WriteStatistics%d", party_member.party_idx);
                 const float height = ImGui::GetCursorPosY() - start_y;
                 ImGui::SetCursorPosY(start_y);
-                if (ImGui::Button(button_name, ImVec2(width, height)) && ImGui::IsKeyDown(ImGuiKey_ModCtrl)) {
+                if (ImGui::Button(button_name, ImVec2(width, height)) && ImGui::IsKeyDown(ImGuiMod_Ctrl)) {
                     WritePlayerStatisticsAllSkills(&party_member);
                 }
                 ImGui::PopStyleVar();
@@ -314,7 +315,7 @@ namespace {
                 return static_cast<PartyMember*>(nullptr); // Can fail if game hasn't got all the goodies yet
             }
             // NB: Sanitising removes [henchman type] and player numbers
-            const auto sanitised = GuiUtils::SanitizePlayerName(agent_name);
+            const auto sanitised = TextUtils::SanitizePlayerName(agent_name);
             auto party_member = GetPartyMemberByEncName(sanitised.c_str());
             if (!party_member) {
                 party_member = new PartyMember(sanitised.c_str(), agent_id, party_idx);
@@ -433,7 +434,7 @@ namespace {
             return;
         }
 
-        const std::wstring arg1 = GuiUtils::ToLower(argv[1]);
+        const std::wstring arg1 = TextUtils::ToLower(argv[1]);
 
         if (argc == 2) {
             /* command: /skillstats reset */
@@ -444,7 +445,7 @@ namespace {
             /* command: /skllstats playerNum */
             else {
                 uint32_t player_number = 0;
-                if (GuiUtils::ParseUInt(argv[1], &player_number) && player_number > 0 &&
+                if (TextUtils::ParseUInt(argv[1], &player_number) && player_number > 0 &&
                     player_number <= party_members.size()) {
                     --player_number; // List will start at index zero
                     WritePlayerStatistics(player_number);
@@ -461,11 +462,11 @@ namespace {
         /* command: /skillstats playerNum skillNum */
         if (argc >= 3) {
             uint32_t player_number = 0;
-            if (GuiUtils::ParseUInt(argv[1], &player_number) && player_number > 0 &&
+            if (TextUtils::ParseUInt(argv[1], &player_number) && player_number > 0 &&
                 player_number <= party_members.size()) {
                 --player_number;
                 uint32_t skill_number = 0;
-                if (GuiUtils::ParseUInt(argv[2], &skill_number) && skill_number > 0 && skill_number < 9) {
+                if (TextUtils::ParseUInt(argv[2], &skill_number) && skill_number > 0 && skill_number < 9) {
                     --skill_number;
                     WritePlayerStatistics(player_number, skill_number);
                 }

@@ -24,6 +24,9 @@
 #include <Windows/Pcons.h>
 #include <Windows/PconsWindow.h>
 
+#include <Utils/FontLoader.h>
+#include <Utils/TextUtils.h>
+
 float Pcon::size = 46.0f;
 int Pcon::pcons_delay = 5000;
 int Pcon::lunar_delay = 500;
@@ -59,9 +62,9 @@ Pcon::Pcon(const char* chatname,
     if (desc_) {
         desc = desc_;
     }
-    chat = chatname ? chatname : GuiUtils::WStringToString(filename);
-    abbrev = abbrevname ? abbrevname : GuiUtils::RemovePunctuation(chat);
-    ini = ininame ? ininame : GuiUtils::ToSlug(chat);
+    chat = chatname ? chatname : TextUtils::WStringToString(filename);
+    abbrev = abbrevname ? abbrevname : TextUtils::RemovePunctuation(chat);
+    ini = ininame ? ininame : TextUtils::ToSlug(chat);
 }
 
 Pcon::~Pcon()
@@ -131,7 +134,7 @@ void Pcon::Draw(IDirect3DDevice9*)
         ImGui::SetTooltip(out);
     }
     if (maptype != GW::Constants::InstanceType::Loading) {
-        ImFont* f = GetFont(GuiUtils::FontSize::header1);
+        ImFont* f = FontLoader::GetFont(FontLoader::FontSize::header1);
         const ImVec2 nextPos = ImGui::GetCursorPos();
         ImGui::PushFont(f);
         ImVec4 color;
@@ -535,7 +538,7 @@ void Pcon::LoadSettings(const ToolboxIni* inifile, const char* section)
         }
         std::string str(entry.pItem);
         const size_t charname_pos = section_len;
-        std::wstring charname = GuiUtils::StringToWString(entry.pItem + charname_pos);
+        std::wstring charname = TextUtils::StringToWString(entry.pItem + charname_pos);
         bool* char_enabled = GetSettingsByName(charname.c_str());
         *char_enabled = inifile->GetBoolValue(entry.pItem, buf_active, *char_enabled);
     }
@@ -564,7 +567,7 @@ void Pcon::SaveSettings(ToolboxIni* inifile, const char* section) const
         }
         std::string char_section(section);
         char_section.append(":");
-        char_section.append(GuiUtils::WStringToString(charname).c_str());
+        char_section.append(TextUtils::WStringToString(charname).c_str());
         inifile->SetBoolValue(char_section.c_str(), buf_active, _enabled);
     }
 }
@@ -583,7 +586,7 @@ void PconGeneric::OnButtonClick()
     using namespace GW::Constants;
     Pcon::OnButtonClick();
 
-    if (PconsWindow::Instance().shift_click_toggles_category && ImGui::IsKeyDown(ImGuiKey_ModShift)) {
+    if (PconsWindow::Instance().shift_click_toggles_category && ImGui::IsKeyDown(ImGuiMod_Shift)) {
         namespace r = std::ranges;
         const std::vector<std::vector<DWORD>> categories{
             {ItemID::ConsEssence, ItemID::ConsGrail, ItemID::ConsArmor},

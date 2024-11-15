@@ -216,9 +216,12 @@ namespace {
         switch (static_cast<ItemType>(item.type)) {
             case ItemType::Bundle:
             case ItemType::Quest_Item:
-            case ItemType::Key:
             case ItemType::Minipet:
                 return false;
+            case ItemType::Key:
+                if (!item.value)
+                    return false; // Dungeon keys are also keys, but have no value.
+                break;
             default:
                 break;
         }
@@ -481,7 +484,7 @@ void ItemFilter::DrawSettingsInternal()
             const auto new_id = static_cast<uint32_t>(new_item_id);
             if (!dont_hide_for_player.contains(new_id)) {
                 dont_hide_for_player[new_id] = std::string(buf);
-                Log::Info("Added Item %s with ID (%d)", buf, new_id);
+                Log::Flash("Added Item %s with ID (%d)", buf, new_id);
                 std::ranges::fill(buf, '\0');
                 new_item_id = 0;
             }
@@ -521,7 +524,7 @@ void ItemFilter::DrawSettingsInternal()
             const auto new_id = static_cast<uint32_t>(new_item_id_party);
             if (!dont_hide_for_party.contains(new_id)) {
                 dont_hide_for_party[new_id] = std::string(buf);
-                Log::Info("Added Item %s with ID (%d)", buf, new_id);
+                Log::Flash("Added Item %s with ID (%d)", buf, new_id);
                 std::ranges::fill(buf, '\0');
                 new_item_id_party = 0;
             }

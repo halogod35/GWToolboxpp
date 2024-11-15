@@ -1,11 +1,16 @@
 #include "stdafx.h"
 
+#include <GWCA/Utilities/Scanner.h>
+#include <GWCA/Utilities/Hooker.h>
+
+#include <GWCA/Context/MapContext.h>
+
 #include <GWCA/Constants/Constants.h>
+
 #include <GWCA/GameContainers/Array.h>
 #include <GWCA/GameContainers/GamePos.h>
 
 #include <GWCA/GameEntities/Camera.h>
-
 #include <GWCA/GameEntities/Party.h>
 #include <GWCA/GameEntities/Quest.h>
 #include <GWCA/GameEntities/Skill.h>
@@ -33,8 +38,7 @@
 #include <GWCA/Managers/GameThreadMgr.h>
 #include <GWCA/Managers/CameraMgr.h>
 #include <GWCA/Managers/SkillbarMgr.h>
-
-#include <Logger.h>
+#include <GWCA/Managers/QuestMgr.h>
 
 #include <Widgets/AlcoholWidget.h>
 #include <Widgets/Minimap/Minimap.h>
@@ -42,31 +46,21 @@
 #include <Windows/InfoWindow.h>
 #include <Windows/NotepadWindow.h>
 
+#include <Modules/ItemDescriptionHandler.h>
+#include <Modules/ResignLogModule.h>
 #include <Modules/ToolboxSettings.h>
 #include <Modules/DialogModule.h>
-#include <GWToolbox.h>
-#include <GWCA/Utilities/Scanner.h>
-#include <GWCA/Managers/QuestMgr.h>
+#include <Modules/GwDatTextureModule.h>
 #include <Modules/HallOfMonumentsModule.h>
 #include <Modules/Resources.h>
-#include <GWCA/Utilities/Hooker.h>
-#include <Modules/GwDatTextureModule.h>
 #include <Utils/ToolboxUtils.h>
-#include <GWCA/Context/MapContext.h>
-#include <Modules/ItemDescriptionHandler.h>
+#include <Logger.h>
+#include <GWToolbox.h>
+#include <Utils/TextUtils.h>
+#include <GWCA/Context/GameplayContext.h>
 
 namespace {
-    enum class Status {
-        Unknown,
-        NotYetConnected,
-        Connected,
-        Resigned,
-        Left
-    };
 
-    std::vector<Status> resign_statuses;
-    std::vector<unsigned long> timestamp;
-    std::queue<std::wstring> send_queue;
 
     DWORD mapfile = 0;
     std::map<std::wstring, HallOfMonumentsAchievements*> target_achievements;
@@ -85,8 +79,6 @@ namespace {
     bool show_mobcount = true;
     bool show_quest = true;
     bool show_resignlog = true;
-
-    bool show_last_to_resign_message = false;
 
     GW::HookEntry MessageCore_Entry;
     GW::HookEntry InstanceLoadFile_Entry;
@@ -124,169 +116,10 @@ namespace {
         return ImGui::InputTextEx(label, nullptr, info_string, _countof(info_string), ImVec2(-160.f * ImGui::GetIO().FontGlobalScale, 0), ImGuiInputTextFlags_ReadOnly);
     }
 
-    const char* GetStatusStr(const Status _status)
-    {
-        switch (_status) {
-            case Status::Unknown:
-                return "Unknown";
-            case Status::NotYetConnected:
-                return "Not connected";
-            case Status::Connected:
-                return "Connected";
-            case Status::Resigned:
-                return "Resigned";
-            case Status::Left:
-                return "Left";
-            default:
-                return "";
-        }
-    }
-
-    Status GetResignStatus(const size_t index)
-    {
-        return index < resign_statuses.size() ? resign_statuses[index] : Status::Unknown;
-    }
-
-    int PrintResignStatus(wchar_t* buffer, const size_t size, const size_t index, const wchar_t* player_name)
-    {
-        if (!player_name) {
-            return 0;
-        }
-        const auto player_status = GetResignStatus(index);
-        const char* status_str = GetStatusStr(player_status);
-        return swprintf(buffer, size, L"%zu. %s - %S", index + 1, player_name,
-                        player_status == Status::Connected
-                        && GW::Map::GetInstanceType() == GW::Constants::InstanceType::Explorable
-                            ? "Connected (not resigned)" : status_str);
-    }
-
-    const size_t GetPartyPlayerIndex(const uint32_t login_number)
-    {
-        const auto party = GW::PartyMgr::GetPartyInfo();
-        for (size_t i = 0; party && i < party->players.size(); i++) {
-            if (party->players[i].login_number == login_number) {
-                return i;
-            }
-        }
-        return 0xff;
-    }
-
-    void CheckAndWarnIfNotResigned()
-    {
-        if (!show_last_to_resign_message) {
-            return;
-        }
-        const auto party = GW::PartyMgr::GetPartyInfo();
-        if (!(party && party->players.size() > 1)) {
-            return; // Not in a party of more than 1 person
-        }
-
-        const size_t my_index = GetPartyPlayerIndex(GW::PlayerMgr::GetPlayerNumber());
-        if (GetResignStatus(my_index) == Status::Resigned) {
-            return; // I've resigned
-        }
-
-        for (size_t i = 0; i < resign_statuses.size(); i++) {
-            if (i == my_index) {
-                continue;
-            }
-            if (resign_statuses[i] == Status::Connected) {
-                return; // Someone else still to resign.
-            }
-        }
-
-        Log::Warning("You're the only player left to resign. Type /resign in chat to resign.");
-    }
-
-    // Returns non-null terminated pointer to start of string argument.
-    wchar_t* GetStringArgument(wchar_t* encoded_string, size_t* string_argument_length)
-    {
-        wchar_t* start = wcschr(encoded_string, 0x107);
-        if (!start) {
-            return nullptr;
-        }
-        start += 1;
-        const wchar_t* end = wcschr(start, 0x1);
-        if (!end) {
-            return nullptr;
-        }
-        *string_argument_length = end - start;
-        return start;
-    }
-
-    void OnMessageCore(GW::HookStatus*, GW::Packet::StoC::MessageCore* pak)
-    {
-        // 0x107 is the "start string" marker
-        if (wmemcmp(pak->message, L"\x7BFF\xC9C4\xAEAA\x1B9B\x107", 5) != 0) {
-            return;
-        }
-
-        // get all the data
-        GW::PartyInfo* info = GW::PartyMgr::GetPartyInfo();
-        if (info == nullptr) {
-            return;
-        }
-        GW::PlayerPartyMemberArray& partymembers = info->players;
-        if (!partymembers.valid()) {
-            return;
-        }
-
-        // Prepare the name
-        size_t name_len = 0;
-        const wchar_t* name_argument = GetStringArgument(pak->message, &name_len);
-        if (!name_argument) {
-            return;
-        }
-        const std::wstring buf(name_argument, name_len);
-        // set the right index in party
-        for (size_t i = 0; i < partymembers.size() && i < resign_statuses.size(); i++) {
-            if (resign_statuses[i] == Status::Resigned) {
-                continue;
-            }
-            const wchar_t* player_name = GW::PlayerMgr::GetPlayerName(partymembers[i].login_number);
-            if (player_name && GuiUtils::SanitizePlayerName(player_name) == buf) {
-                resign_statuses[i] = Status::Resigned;
-                timestamp[i] = GW::Map::GetInstanceTime();
-                break;
-            }
-        }
-        CheckAndWarnIfNotResigned();
-    }
-
-    void CHAT_CMD_FUNC(CmdResignLog)
-    {
-        if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Explorable) {
-            return;
-        }
-        GW::PartyInfo* info = GW::PartyMgr::GetPartyInfo();
-        if (info == nullptr) {
-            return;
-        }
-        GW::PlayerPartyMemberArray& partymembers = info->players;
-        if (!partymembers.valid()) {
-            return;
-        }
-        const size_t index_max = std::min<size_t>(resign_statuses.size(), partymembers.size());
-        for (size_t i = 0; i < index_max; ++i) {
-            const GW::PlayerPartyMember& partymember = partymembers[i];
-            wchar_t buffer[256];
-            if (resign_statuses[i] != Status::Connected) {
-                continue;
-            }
-            PrintResignStatus(buffer, _countof(buffer), i, GW::PlayerMgr::GetPlayerName(partymember.login_number));
-            send_queue.push(std::wstring(buffer));
-        }
-        CheckAndWarnIfNotResigned();
-    }
-
     void OnInstanceLoad(GW::HookStatus*, const GW::Packet::StoC::InstanceLoadFile* packet)
     {
         quoted_item_id = 0;
         mapfile = packet->map_fileID;
-        for (unsigned i = 0; i < resign_statuses.size(); ++i) {
-            resign_statuses[i] = Status::NotYetConnected;
-            timestamp[i] = 0;
-        }
     }
 
     void GetIdsFromFileId(const uint32_t param_1, short* param_2)
@@ -316,7 +149,10 @@ namespace {
         InfoField("Map Region", "%d", GW::Map::GetRegion());
         InfoField("Map District", "%d", GW::Map::GetDistrict());
         InfoField("Map Type", type);
-        InfoField("Map file", "%lu", mapfile);
+        InfoField("model_file_id", "0x%X", mapfile);
+        short file_str[8] = { 0 };
+        GetIdsFromFileId(mapfile, file_str);
+        EncInfoField("model_file_id str", (wchar_t*)file_str);
         ImGui::ShowHelp("Map file is unique for each pathing map (e.g. used by minimap).\nMany different maps use the same map file");
         if (ImGui::TreeNodeEx("Advanced", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth)) {
             const GW::AreaInfo* map_info = GW::Map::GetMapInfo(map_id);
@@ -397,7 +233,7 @@ namespace {
         if (ImGui::TreeNodeEx("Guild Info", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth)) {
             ImGui::PushID("guild_info");
             InfoField("Addr", "0x%p", guild);
-            InfoField("Name", "%s [%s]", GuiUtils::WStringToString(guild->name).c_str(), GuiUtils::WStringToString(guild->tag).c_str());
+            InfoField("Name", "%s [%s]", TextUtils::WStringToString(guild->name).c_str(), TextUtils::WStringToString(guild->tag).c_str());
             InfoField("Faction", "%d (%s)", guild->faction_point, guild->faction ? "Luxon" : "Kurzick");
             ImGui::PopID();
             ImGui::TreePop();
@@ -520,7 +356,7 @@ namespace {
             if (ImGui::TreeNodeEx("Player Info", ImGuiTreeNodeFlags_FramePadding | ImGuiTreeNodeFlags_SpanAvailWidth)) {
                 ImGui::PushID("player_info");
                 InfoField("Addr", "%p", player);
-                InfoField("Name", "%s", GuiUtils::WStringToString(player->name).c_str());
+                InfoField("Name", "%s", TextUtils::WStringToString(player->name).c_str());
                 if (player->active_title_tier) {
                     const GW::TitleTier& tier = GW::GetGameContext()->world->title_tiers[player->active_title_tier];
                     static GuiUtils::EncString title_enc_string;
@@ -619,41 +455,22 @@ namespace {
         if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Loading) {
             return;
         }
-        GW::PartyInfo* info = GW::PartyMgr::GetPartyInfo();
-        if (info == nullptr) {
+        const auto players = GW::PartyMgr::GetPartyPlayers();
+        if (!players) {
             return;
         }
-        GW::PlayerPartyMemberArray& partymembers = info->players;
-        if (!partymembers.valid()) {
-            return;
-        }
-        for (size_t i = 0; i < partymembers.size(); ++i) {
-            const GW::PlayerPartyMember& partymember = partymembers[i];
-            wchar_t* player_name = GW::PlayerMgr::GetPlayerName(partymember.login_number);
-            if (!player_name) {
+        std::wstring buf;
+        for (auto& partymember : *players) {
+            if (!ResignLogModule::PrintResignStatus(partymember.login_number, buf, true))
                 continue;
-            }
-            ImGui::PushID(static_cast<int>(i));
+            ImGui::PushID(static_cast<int>(partymember.login_number));
             if (ImGui::Button("Send")) {
-                // Todo: wording probably needs improvement
-                wchar_t buf[256];
-                PrintResignStatus(buf, 256, i, player_name);
-                GW::Chat::SendChat('#', buf);
+                GW::Chat::SendChat('#', buf.c_str());
             }
             ImGui::SameLine();
-            const char* status_str = GetStatusStr(resign_statuses[i]);
-            ImGui::Text("%d. %S - %s", i + 1, player_name, status_str);
-            if (resign_statuses[i] != Status::Unknown) {
-                ImGui::SameLine();
-                ImGui::TextDisabled("[%d:%02d:%02d.%03d]", timestamp[i] / (60 * 60 * 1000), timestamp[i] / (60 * 1000) % 60, timestamp[i] / 1000 % 60, timestamp[i] % 1000);
-            }
+            ImGui::TextUnformatted(TextUtils::WStringToString(buf).c_str());
             ImGui::PopID();
         }
-    }
-
-    void DrawGameSettings()
-    {
-        ImGui::Checkbox("Show message in chat when you're the last player to resign", &show_last_to_resign_message);
     }
 
     bool GetQuestEntryGroupName(const GW::Constants::QuestID quest_id, wchar_t* out, const size_t out_len)
@@ -705,7 +522,7 @@ namespace {
     void OnRecordedAsyncDecode_Decoded(void* param, const wchar_t* decoded) {
         auto e = (RecordedAsyncDecode*)param;
         e->decoded = decoded;
-        e->decoded_str = GuiUtils::WStringToString(e->decoded);
+        e->decoded_str = TextUtils::WStringToString(e->decoded);
     }
 
     void __fastcall OnValidateAsyncDecodeStr(void* ecx, void* edx, const wchar_t* s, void* cb, void* wParam) {
@@ -826,7 +643,13 @@ namespace {
         }
     }
 
-
+    void HighlightFrame(GW::UI::Frame* frame) {
+        const auto root = GW::UI::GetRootFrame();
+        const auto top_left = frame->position.GetTopLeftOnScreen(root);
+        const auto bottom_right = frame->position.GetBottomRightOnScreen(root);
+        const auto draw_list = ImGui::GetBackgroundDrawList();
+        draw_list->AddRect({ top_left.x, top_left.y }, { bottom_right.x, bottom_right.y }, IM_COL32_WHITE);
+    }
 
 
     void PostDraw() {
@@ -915,7 +738,7 @@ namespace {
                 ImGui::PopID();
             }
             ImGui::PopID();
-            if (ImGui::IsKeyDown(ImGuiKey_ModAlt)) {
+            if (ImGui::IsKeyDown(ImGuiMod_Alt)) {
                 ImGui::SetScrollHereY();
             }
         }
@@ -952,28 +775,21 @@ namespace {
         [[maybe_unused]] const GW::Player* me_player = me ? GW::PlayerMgr::GetPlayerByID(me->player_number) : nullptr;
         [[maybe_unused]] const GW::Chat::ChatBuffer* log = GW::Chat::GetChatLog();
         [[maybe_unused]] const GW::AreaInfo* ai = GW::Map::GetMapInfo(GW::Map::GetMapID());
+        [[maybe_unused]] const auto ac = me_player ? GW::AccountMgr::GetAvailableCharacter(me_player->name) : nullptr;
+        [[maybe_unused]] const auto gpc = GW::GetGameplayContext();
+        
+
+        [[maybe_unused]] const auto mission_map_context = GW::Map::GetMissionMapContext();
+        [[maybe_unused]] const auto mission_map_frame = mission_map_context ? GW::UI::GetFrameById(mission_map_context->frame_id) : nullptr;
+        [[maybe_unused]] const auto world_map_context = GW::Map::GetWorldMapContext();
+
+        [[maybe_unused]]  const auto campaign = ac ? ac->campaign() : 0;
+        [[maybe_unused]]  const auto level = ac ? ac->level() : 0;
+        [[maybe_unused]]  const auto primary = ac ? ac->primary() : 0;
+        [[maybe_unused]] const auto secondary = ac ? ac->secondary() : 0;
 
 #ifdef _DEBUG
-        const auto frame = GW::UI::GetFrameByLabel(L"NPCInteract");
-        if (frame && frame->IsVisible()) {
-            auto dialog_buttons_frame = GW::UI::GetChildFrame(frame, 2); // Scrollable frame
-            dialog_buttons_frame = GW::UI::GetChildFrame(dialog_buttons_frame, 0);
-            dialog_buttons_frame = GW::UI::GetChildFrame(dialog_buttons_frame, 0);
-            dialog_buttons_frame = GW::UI::GetChildFrame(dialog_buttons_frame, 1);
-            if (dialog_buttons_frame) {
-                for (auto& sibling : dialog_buttons_frame->relation.siblings) {
-                    const auto button_frame = sibling.GetFrame();
-                    if (button_frame->child_offset_id != 0x1)
-                        continue; // Not a button frame
-                    const auto top_left = button_frame->position.GetTopLeftOnScreen(frame);
-                    const auto bottom_right = button_frame->position.GetBottomRightOnScreen(frame);
-                    const auto label = std::to_string(button_frame->field100_0x1a8);
-                    const auto draw_list = ImGui::GetBackgroundDrawList();
-                    draw_list->AddRect({ top_left.x, top_left.y }, { bottom_right.x, bottom_right.y }, IM_COL32_WHITE);
-                    draw_list->AddText({ top_left.x, top_left.y }, IM_COL32_WHITE, label.c_str());
-                }
-            }
-        }
+        //HighlightFrame(mission_map_frame);
 #endif
     }
 }
@@ -997,15 +813,11 @@ void InfoWindow::Initialize()
 {
     ToolboxWindow::Initialize();
 
-    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MessageCore>(&MessageCore_Entry, OnMessageCore);
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::QuotedItemPrice>(&InstanceLoadFile_Entry,
                                                                         [this](GW::HookStatus*, const GW::Packet::StoC::QuotedItemPrice* packet) -> void {
                                                                             quoted_item_id = packet->itemid;
                                                                         });
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::InstanceLoadFile>(&InstanceLoadFile_Entry, OnInstanceLoad);
-    GW::Chat::CreateCommand(L"resignlog", CmdResignLog);
-
-
 }
 
 void InfoWindow::Draw(IDirect3DDevice9*)
@@ -1142,6 +954,7 @@ void InfoWindow::Draw(IDirect3DDevice9*)
                 static wchar_t name_buf[128];
                 GetQuestEntryGroupName(q->quest_id, name_buf, _countof(name_buf));
                 EncInfoField("Quest Entry:", name_buf);
+                EncInfoField("Objectives:", q->objectives);
             }
 #ifdef _DEBUG
             std::string quests;
@@ -1208,7 +1021,9 @@ void InfoWindow::Draw(IDirect3DDevice9*)
             ImGui::Text("%d foes in spirit range", spirit_count);
             ImGui::Text("%d foes in compass range", compass_count);
         }
-        if (show_resignlog && ImGui::CollapsingHeader("Resign Log")) {
+        if (show_resignlog 
+            && ImGui::CollapsingHeader("Resign Log") 
+            && GWToolbox::IsModuleEnabled("Resign Log")) {
             DrawResignlog();
         }
     }
@@ -1217,45 +1032,6 @@ void InfoWindow::Draw(IDirect3DDevice9*)
 #endif
     ImGui::End();
     PostDraw();
-}
-
-void InfoWindow::Update(const float)
-{
-    if (!send_queue.empty() && TIMER_DIFF(send_timer) > 600) {
-        send_timer = TIMER_INIT();
-        if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Loading
-            && GW::Agents::GetControlledCharacter()) {
-            GW::Chat::SendChat('#', send_queue.front().c_str());
-            send_queue.pop();
-        }
-    }
-
-    if (show_resignlog
-        && GW::Map::GetInstanceType() != GW::Constants::InstanceType::Loading
-        && GW::PartyMgr::GetPartyInfo()) {
-        GW::PlayerPartyMemberArray& partymembers = GW::PartyMgr::GetPartyInfo()->players;
-        if (partymembers.valid()) {
-            if (partymembers.size() != resign_statuses.size()) {
-                resign_statuses.resize(partymembers.size(), Status::Unknown);
-                timestamp.resize(partymembers.size(), 0);
-            }
-        }
-        for (unsigned i = 0; i < partymembers.size(); ++i) {
-            GW::PlayerPartyMember& partymember = partymembers[i];
-            if (partymember.connected()) {
-                if (resign_statuses[i] == Status::NotYetConnected || resign_statuses[i] == Status::Unknown) {
-                    resign_statuses[i] = Status::Connected;
-                    timestamp[i] = GW::Map::GetInstanceTime();
-                }
-            }
-            else {
-                if (resign_statuses[i] == Status::Connected || resign_statuses[i] == Status::Resigned) {
-                    resign_statuses[i] = Status::Left;
-                    timestamp[i] = GW::Map::GetInstanceTime();
-                }
-            }
-        }
-    }
 }
 
 void InfoWindow::DrawSettingsInternal()
@@ -1297,8 +1073,6 @@ void InfoWindow::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(show_quest);
     LOAD_BOOL(show_mobcount);
     LOAD_BOOL(show_resignlog);
-
-    LOAD_BOOL(show_last_to_resign_message);
 }
 
 void InfoWindow::SaveSettings(ToolboxIni* ini)
@@ -1314,19 +1088,5 @@ void InfoWindow::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(show_quest);
     SAVE_BOOL(show_mobcount);
     SAVE_BOOL(show_resignlog);
-
-    SAVE_BOOL(show_last_to_resign_message);
 }
 
-void InfoWindow::RegisterSettingsContent()
-{
-    ToolboxWindow::RegisterSettingsContent();
-    ToolboxModule::RegisterSettingsContent(
-        "Game Settings", ICON_FA_GAMEPAD,
-        [this](const std::string&, const bool is_showing) {
-            if (is_showing) {
-                DrawGameSettings();
-            }
-        },
-        0.9f);
-}

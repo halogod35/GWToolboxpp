@@ -19,6 +19,7 @@
 #include <Windows/HotkeysWindow.h>
 #include <Windows/MainWindow.h>
 #include <Windows/PconsWindow.h>
+#include <Utils/TextUtils.h>
 
 using namespace GW::Constants;
 
@@ -333,7 +334,7 @@ void PconsWindow::OnVanquishComplete(GW::HookStatus*, GW::Packet::StoC::Vanquish
         return;
     }
     instance.SetEnabled(false);
-    Log::Info("Cons auto-disabled on completion");
+    Log::Flash("Cons auto-disabled on completion");
 }
 
 void CHAT_CMD_FUNC(PconsWindow::CmdPcons) {
@@ -341,7 +342,7 @@ void CHAT_CMD_FUNC(PconsWindow::CmdPcons) {
         Instance().ToggleEnable();
     }
     else if (argc >= 2) {
-        const std::wstring arg1 = GuiUtils::ToLower(argv[1]);
+        const std::wstring arg1 = TextUtils::ToLower(argv[1]);
         if (arg1 != L"on" && arg1 != L"off" && arg1 != L"toggle" && arg1 != L"refill") {
             Log::Error("Invalid argument '%ls', please use /pcons [on|off|toggle] [pcon]", argv[1]);
         }
@@ -360,20 +361,20 @@ void CHAT_CMD_FUNC(PconsWindow::CmdPcons) {
             }
         }
         else {
-            std::wstring argPcon = GuiUtils::ToLower(argv[2]);
+            std::wstring argPcon = TextUtils::ToLower(argv[2]);
             for (auto i = 3; i < argc; i++) {
                 argPcon.append(L" ");
-                argPcon.append(GuiUtils::ToLower(argv[i]));
+                argPcon.append(TextUtils::ToLower(argv[i]));
             }
             const std::vector<Pcon*>& pcons = Instance().pcons;
-            const std::string compare = GuiUtils::WStringToString(argPcon);
+            const std::string compare = TextUtils::WStringToString(argPcon);
             const unsigned int compareLength = compare.length();
             Pcon* bestMatch = nullptr;
             unsigned int bestMatchLength = 0;
             for (size_t i = 0; i < pcons.size(); i++) {
                 Pcon* pcon = pcons[i];
                 const std::string pconName(pcon->chat);
-                std::string pconNameSanitized = GuiUtils::ToLower(pconName);
+                std::string pconNameSanitized = TextUtils::ToLower(pconName);
                 const unsigned int pconNameLength = pconNameSanitized.length();
                 if (compareLength > pconNameLength) {
                     continue;
@@ -557,7 +558,7 @@ bool PconsWindow::SetEnabled(const bool b)
             const ImGuiWindow* main = ImGui::FindWindowByName(MainWindow::Instance().Name());
             const ImGuiWindow* pcon = ImGui::FindWindowByName(Name());
             if ((pcon == nullptr || pcon->Collapsed || !visible) && (main == nullptr || main->Collapsed || !MainWindow::Instance().visible)) {
-                Log::Info("Pcons %s", enabled ? "enabled" : "disabled");
+                Log::Flash("Pcons %s", enabled ? "enabled" : "disabled");
             }
             break;
         }
@@ -583,7 +584,9 @@ void PconsWindow::RegisterSettingsContent()
 
 void PconsWindow::DrawLunarsAndAlcoholSettings()
 {
+    ImGui::NewLine();
     ImGui::Text("Lunars and Alcohol");
+    ImGui::Indent();
     ImGui::Text("Current drunk level: %d", Pcon::alcohol_level);
     ImGui::StartSpacedElements(380.f);
     ImGui::NextSpacedElement();
@@ -600,6 +603,7 @@ void PconsWindow::DrawLunarsAndAlcoholSettings()
     ImGui::NextSpacedElement();
     ImGui::Checkbox("Hide Spiritual Possession and Lucky Aura", &Pcon::suppress_lunar_skills);
     ImGui::ShowHelp("Will hide the skills in your effect monitor");
+    ImGui::Unindent();
 }
 
 void PconsWindow::CheckObjectivesCompleteAutoDisable()
@@ -623,7 +627,7 @@ void PconsWindow::CheckObjectivesCompleteAutoDisable()
     if (objective_complete) {
         elite_area_disable_triggered = true;
         SetEnabled(false);
-        Log::Info("Cons auto-disabled on completion");
+        Log::Flash("Cons auto-disabled on completion");
     }
 }
 
@@ -641,7 +645,7 @@ void PconsWindow::CheckBossRangeAutoDisable()
     if (d > 0 && d <= Range::Spirit) {
         elite_area_disable_triggered = true;
         SetEnabled(false);
-        Log::Info("Cons auto-disabled in range of boss");
+        Log::Flash("Cons auto-disabled in range of boss");
     }
 }
 

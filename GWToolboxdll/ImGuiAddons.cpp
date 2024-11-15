@@ -10,6 +10,13 @@ namespace {
     void* imguiaddons_context_menu_wparam = nullptr;
     const char* imguiaddons_context_menu_id = "###imguiaddons_context_menu";
     ImGui::ImGuiContextMenuCallback imguiaddons_context_menu_pending = nullptr;
+
+    ImGui::ImGuiConfirmDialogCallback imguiaddons_confirm_dialog_callback = nullptr;
+    void* imguiaddons_confirm_dialog_wparam = nullptr;
+    const char* imguiaddons_confirm_dialog_id = "###imguiaddons_confirm_dialog";
+    ImGui::ImGuiConfirmDialogCallback imguiaddons_confirm_dialog_pending = nullptr;
+    std::string imguiaddons_confirm_dialog_message = "Are you sure?";
+
 }
 
 namespace ImGui {
@@ -17,6 +24,14 @@ namespace ImGui {
     int element_spacing_cols = 1;
     int element_spacing_col_idx = 0;
     float* element_spacing_indent = nullptr;
+
+    void SetTooltip(std::function<void()> tooltip_callback)
+    {
+        if (!BeginTooltipEx(ImGuiTooltipFlags_OverridePrevious, ImGuiWindowFlags_None))
+            return;
+        tooltip_callback();
+        EndTooltip();
+    }
 
     const float& FontScale()
     {
@@ -55,10 +70,13 @@ namespace ImGui {
 
     void DrawContextMenu() {
         if (imguiaddons_context_menu_pending) {
-            imguiaddons_context_menu_callback = imguiaddons_context_menu_pending;
+            if (!ImGui::IsPopupOpen(imguiaddons_context_menu_id)) {
+                imguiaddons_context_menu_callback = imguiaddons_context_menu_pending;
+                ImGui::OpenPopup(imguiaddons_context_menu_id);
+                imguiaddons_context_menu_pending = nullptr;
+                return;
+            }
             imguiaddons_context_menu_pending = nullptr;
-            ImGui::OpenPopup(imguiaddons_context_menu_id);
-            return;
         }
         if (!ImGui::BeginPopup(imguiaddons_context_menu_id))
             return;
@@ -95,58 +113,64 @@ namespace ImGui {
         SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), flags, ImVec2(0.5f, 0.5f));
     }
 
-    bool ConfirmDialog(const char* message, bool* result)
-    {
-        bool res = false;
-        ImGui::OpenPopup("##confirm_popup");
-        if (ImGui::BeginPopupModal("##confirm_popup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            static bool was_enter_down = true, was_escape_down = true;
-            if (ImGui::IsWindowAppearing()) {
-                was_enter_down = ImGui::IsKeyDown(ImGuiKey_Enter);
-                was_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
+    void DrawConfirmDialog() {
+        if (imguiaddons_confirm_dialog_pending) {
+            if (!ImGui::IsPopupOpen(imguiaddons_confirm_dialog_id)) {
+                imguiaddons_confirm_dialog_callback = imguiaddons_confirm_dialog_pending;
+                ImGui::OpenPopup(imguiaddons_confirm_dialog_id);
+                imguiaddons_confirm_dialog_pending = nullptr;
+                return;
             }
-            bool is_enter_down = ImGui::IsKeyDown(ImGuiKey_Enter);
-            bool is_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
-            ImGui::TextUnformatted(message);
-
-            if (ImGui::Button("Yes", ImVec2(120, 0)) || (!was_enter_down && is_enter_down)) {
-                *result = true;
-                res = true;
-                ImGui::CloseCurrentPopup();
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("No", ImVec2(120, 0)) || (!was_escape_down && is_escape_down)) {
-                *result = false;
-                res = true;
-                ImGui::CloseCurrentPopup();
-            }
-            was_escape_down = is_escape_down;
-            was_enter_down = is_enter_down;
-            ImGui::EndPopup();
+            imguiaddons_confirm_dialog_pending = nullptr;
         }
-        return res;
+        if (!ImGui::BeginPopupModal(imguiaddons_confirm_dialog_id, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+            if (imguiaddons_confirm_dialog_callback) {
+                imguiaddons_confirm_dialog_callback(false, imguiaddons_confirm_dialog_wparam);
+                imguiaddons_confirm_dialog_callback = nullptr;
+            }
+            return;
+        }
+        static bool was_enter_down = true, was_escape_down = true;
+        if (ImGui::IsWindowAppearing()) {
+            was_enter_down = ImGui::IsKeyDown(ImGuiKey_Enter);
+            was_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
+        }
+        bool is_enter_down = ImGui::IsKeyDown(ImGuiKey_Enter);
+        bool is_escape_down = ImGui::IsKeyDown(ImGuiKey_Escape);
+        ImGui::TextUnformatted(imguiaddons_confirm_dialog_message.c_str());
+
+        if (ImGui::Button("Yes", ImVec2(120, 0)) || (!was_enter_down && is_enter_down)) {
+            ImGui::CloseCurrentPopup();
+            imguiaddons_confirm_dialog_callback(true, imguiaddons_confirm_dialog_wparam);
+            imguiaddons_confirm_dialog_callback = nullptr;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("No", ImVec2(120, 0)) || (!was_escape_down && is_escape_down)) {
+            ImGui::CloseCurrentPopup();
+            imguiaddons_confirm_dialog_callback(false, imguiaddons_confirm_dialog_wparam);
+            imguiaddons_confirm_dialog_callback = nullptr;
+        }
+        was_escape_down = is_escape_down;
+        was_enter_down = is_enter_down;
+        ImGui::EndPopup();
     }
 
-    bool SmallConfirmButton(const char* label, bool* confirm_bool, const char* confirm_content)
+    void ConfirmDialog(const char* message, ImGui::ImGuiConfirmDialogCallback callback, void* wparam)
+    {
+        imguiaddons_confirm_dialog_message = message;
+        imguiaddons_confirm_dialog_pending = callback;
+        imguiaddons_confirm_dialog_wparam = wparam;
+    }
+
+    bool SmallConfirmButton(const char* label, const char* confirm_content, ImGui::ImGuiConfirmDialogCallback callback, void* wparam)
     {
         static char id_buf[128];
-        snprintf(id_buf, sizeof(id_buf), "%s##confirm_popup%p", label, confirm_bool);
+        snprintf(id_buf, sizeof(id_buf), "%s##confirm_popup%p", label, label);
         if (SmallButton(label)) {
-            OpenPopup(id_buf);
+            ConfirmDialog(confirm_content, callback, wparam);
+            return true;
         }
-        if (BeginPopupModal(id_buf, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            Text(confirm_content);
-            if (Button("OK", ImVec2(120, 0))) {
-                *confirm_bool = true;
-                CloseCurrentPopup();
-            }
-            SameLine();
-            if (Button("Cancel", ImVec2(120, 0))) {
-                CloseCurrentPopup();
-            }
-            EndPopup();
-        }
-        return *confirm_bool;
+        return false;
     }
 
     bool ChooseKey(const char* label, char* buf, size_t buf_len, long* output_key_code)
@@ -223,6 +247,9 @@ namespace ImGui {
         const ImVec2& textsize = CalcTextSize(label);
         const bool clicked = ButtonEx(button_id, size, flags);
 
+        ImGuiContext& g = *GImGui;
+        const auto clip_rect = g.LastItemData.Rect.ToVec4();
+
         const ImVec2& button_size = GetItemRectSize();
         ImVec2 img_size = icon_size;
         if (icon_size.x > 0.f) {
@@ -250,18 +277,19 @@ namespace ImGui {
         const float text_y = pos.y + (button_size.y - textsize.y) * style.ButtonTextAlign.y;
         const auto top_left = ImVec2(img_x, img_y);
         const auto bottom_right = ImVec2(img_x + img_size.x, img_y + img_size.y);
+        const auto draw_list = GetWindowDrawList();
         for (size_t i = 0; i < icons_len; i++) {
             if (!icons[i])
                 continue;
             if (uv0.x == uv1.x && uv0.y == uv1.y) {
-                GetWindowDrawList()->AddImage(icons[i], top_left, bottom_right, uv0, CalculateUvCrop(icons[i], img_size));
+                draw_list->AddImage(icons[i], top_left, bottom_right, uv0, CalculateUvCrop(icons[i], img_size));
             }
             else {
-                GetWindowDrawList()->AddImage(icons[i], top_left, bottom_right, uv0, uv1);
+                draw_list->AddImage(icons[i], top_left, bottom_right, uv0, uv1);
             }
         }
         if (label) {
-            GetWindowDrawList()->AddText(ImVec2(text_x, text_y), ImColor(GetStyle().Colors[ImGuiCol_Text]), label);
+            draw_list->AddText(NULL, 0.0f, ImVec2(text_x, text_y), ImColor(style.Colors[ImGuiCol_Text]), label, nullptr, 0.0f, &clip_rect);
         }
         return clicked;
     }
@@ -392,27 +420,35 @@ namespace ImGui {
         EndCombo();
         return value_changed;
     }
+    
+
+    // Get float ratio for height/width of image, e.g. image 200px x 100px would be 2.0f ratio
+    float GetImageRatio(const ImTextureID user_texture_id) {
+        if (!user_texture_id)
+            return .0f;
+        const auto texture = static_cast<IDirect3DTexture9*>(user_texture_id);
+        D3DSURFACE_DESC desc;
+        const HRESULT res = texture->GetLevelDesc(0, &desc);
+        if (!SUCCEEDED(res))
+            return .0f;
+        return static_cast<float>(desc.Width) / static_cast<float>(desc.Height);
+    }
+
 
     ImVec2 CalculateUvCrop(const ImTextureID user_texture_id, const ImVec2& size)
     {
         ImVec2 uv1 = {1.f, 1.f};
-        if (user_texture_id) {
-            const auto texture = static_cast<IDirect3DTexture9*>(user_texture_id);
-            D3DSURFACE_DESC desc;
-            const HRESULT res = texture->GetLevelDesc(0, &desc);
-            if (!SUCCEEDED(res)) {
-                return uv1; // Don't throw anything into the log here; this function is called every frame by modules that use it!
-            }
-            const float ratio = size.x / size.y;
-            const float image_ratio = static_cast<float>(desc.Width) / static_cast<float>(desc.Height);
-            if (image_ratio < ratio) {
-                // Image is taller than the required crop; remove bottom of image to fit.
-                uv1.y = ratio * image_ratio;
-            }
-            else if (image_ratio > ratio) {
-                // Image is wider than the required crop; remove right of image to fit.
-                uv1.x = ratio / image_ratio;
-            }
+        float image_ratio = GetImageRatio(user_texture_id);
+        if (image_ratio == 0.f)
+            return uv1;
+        float container_ratio = size.x / size.y;
+        if (image_ratio < container_ratio) {
+            // Image is taller than the required crop; remove bottom of image to fit.
+            uv1.y = container_ratio * image_ratio;
+        }
+        else if (image_ratio > container_ratio) {
+            // Image is wider than the required crop; remove right of image to fit.
+            uv1.x = container_ratio / image_ratio;
         }
         return uv1;
     }
@@ -452,6 +488,47 @@ namespace ImGui {
     void ImageCropped(const ImTextureID user_texture_id, const ImVec2& size)
     {
         Image(user_texture_id, size, {0, 0}, CalculateUvCrop(user_texture_id, size));
+    }
+    void ImageFit(const ImTextureID user_texture_id, const ImVec2& size_of_container) {
+        const auto texture_ratio = GetImageRatio(user_texture_id);
+        if (texture_ratio == .0f) return;
+
+        const auto container_ratio = size_of_container.x / size_of_container.y;
+
+        ImVec2 image_size;  // Final image size
+        ImVec2 offset = { 0.0f, 0.0f };  // Offset for centering the image
+
+        // Check if texture is wider or taller in relation to the container
+        if (texture_ratio > container_ratio) {
+            // The texture is wider, scale by container width
+            image_size.x = size_of_container.x;
+            image_size.y = size_of_container.x / texture_ratio;
+            // Center the image vertically
+            offset.y = (size_of_container.y - image_size.y) * 0.5f;
+        }
+        else {
+            // The texture is taller, scale by container height
+            image_size.y = size_of_container.y;
+            image_size.x = size_of_container.y * texture_ratio;
+            // Center the image horizontally
+            offset.x = (size_of_container.x - image_size.x) * 0.5f;
+        }
+
+        ImVec2 current_cursor_pos = ImGui::GetCursorPos();
+        ImGui::SetCursorPos(ImVec2(current_cursor_pos.x + offset.x, current_cursor_pos.y + offset.y));
+        ImGui::Image(user_texture_id, image_size);        // Render the image
+    }
+
+    bool ImageButton(ImTextureID user_texture_id, const ImVec2& image_size, const ImVec2& uv0, const ImVec2& uv1, int, const ImVec4& bg_col, const ImVec4& tint_col) {
+        ImGuiContext& g = *GImGui;
+        ImGuiWindow* window = g.CurrentWindow;
+        if (window->SkipItems)
+            return false;
+
+        return ImageButtonEx(window->GetID(user_texture_id ? user_texture_id : window), user_texture_id, image_size, uv0, uv1, bg_col, tint_col);
+    }
+    bool IsKeyDown(long key) {
+        return IsKeyDown(static_cast<ImGuiKey>(key));
     }
 
     bool IsMouseInRect(const ImVec2& top_left, const ImVec2& bottom_right)
@@ -505,8 +582,9 @@ namespace ImGui {
     void ClampWindowToScreen(ImGuiWindow* window)
     {
         ImVec2 window_pos = window->Pos;                        // Get the current window position
-        const ImVec2 window_size = window->Size;                // Get the current window size
-        const ImVec2 display_size = ImGui::GetIO().DisplaySize; // Get the display size
+        ImVec2 window_size = window->Size;                // Get the current window size
+        const auto viewport = ImGui::GetMainViewport();
+        const ImVec2 display_size = viewport->Size; // Get the display size
         const std::string_view window_name = window->Name;      // Get the window name
 
         // Check if the window position needs to be clamped based on the original position if available
@@ -514,7 +592,9 @@ namespace ImGui {
 
         // Determine if clamping is needed
         const bool needs_clamping = original_pos.x + window_size.x > display_size.x ||
-                                    original_pos.y + window_size.y > display_size.y;
+                                    original_pos.y + window_size.y > display_size.y ||
+                                    original_pos.x < 0 ||
+                                    original_pos.y < 0;
 
         if (needs_clamping) {
             // Save the original position if not already saved
@@ -524,12 +604,20 @@ namespace ImGui {
 
             // Clamp window position to ensure the entire content is on screen
             if (window_pos.x + window_size.x > display_size.x) window_pos.x = display_size.x - window_size.x;
+            if (window_pos.x < 0) window_pos.x = 0;
             if (window_pos.y + window_size.y > display_size.y) window_pos.y = display_size.y - window_size.y;
+            if (window_pos.y < 0) window_pos.y = 0;
 
             // Set the new window position
             ImGui::SetWindowPos(window, window_pos, ImGuiCond_Always);
             if (window->Collapsed) {
                 original_positions[window_name] = window_pos;
+            }
+            if (window_size.x > display_size.x
+                || window_size.y > display_size.y) {
+                window_size.x = std::min(window_size.x, display_size.x);
+                window_size.y = std::min(window_size.y, display_size.y);
+                ImGui::SetWindowSize(window, window_size);
             }
         }
         else {

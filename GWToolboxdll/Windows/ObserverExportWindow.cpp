@@ -8,6 +8,7 @@
 #include <Modules/ObserverModule.h>
 
 #include <Windows/ObserverExportWindow.h>
+#include <Utils/TextUtils.h>
 
 void ObserverExportWindow::Initialize()
 {
@@ -460,7 +461,7 @@ void ObserverExportWindow::ExportToJSON(Version version)
     }
 
     Resources::EnsureFolderExists(Resources::GetPath(L"observer"));
-    auto file_location = Resources::GetPath(L"observer\\" + GuiUtils::StringToWString(filename));
+    auto file_location = Resources::GetPath(L"observer\\" + TextUtils::StringToWString(filename));
     if (exists(file_location)) {
         std::filesystem::remove(file_location);
     }

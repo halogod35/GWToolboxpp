@@ -22,6 +22,7 @@
 #include <Windows/PacketLoggerWindow.h>
 
 #include <GWToolbox.h>
+#include <Utils/TextUtils.h>
 
 namespace {
     wchar_t* GetMessageCore()
@@ -41,10 +42,10 @@ namespace {
         {
             nlohmann::json json;
             if (!name.empty()) {
-                json["name"] = GuiUtils::WStringToString(name);
+                json["name"] = TextUtils::WStringToString(name);
             }
             if (!description.empty()) {
-                json["description"] = GuiUtils::WStringToString(description);
+                json["description"] = TextUtils::WStringToString(description);
             }
             json["campaign"] = map_info->campaign;
             json["type"] = map_info->type;
@@ -75,7 +76,7 @@ namespace {
             GW::UI::AsyncDecodeStr(map->enc_desc, &map->description);
             maps.emplace(map_id, map);
         }
-        Log::Info("Fetching map info now");
+        Log::Flash("Fetching map info now");
     }
 
     void ExportMapInfo()

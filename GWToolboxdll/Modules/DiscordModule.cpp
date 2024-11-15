@@ -47,6 +47,10 @@ NOTE: Disconnecting/reconnecting will mess this up so repeat process.
 #include <Windows/TravelWindow.h>
 #include <Utils/ToolboxUtils.h>
 
+#ifndef DISCORD_API
+#define DISCORD_API
+#endif
+
 namespace {
 
 
@@ -81,7 +85,8 @@ namespace {
 
     constexpr auto DISCORD_APP_ID = 378706083788881961;
 
-    using DiscordCreate_pt = EDiscordResult(__cdecl*)(DiscordVersion version, DiscordCreateParams* params, IDiscordCore** result);
+    using DiscordCreate_pt = EDiscordResult(DISCORD_API*)(DiscordVersion version, DiscordCreateParams* params, IDiscordCore** result);
+    using DiscordVersion_pt = int(__cdecl*)(int unk, int* out);
 
     const char* region_assets[] = {
         "region_kryta",
@@ -229,27 +234,27 @@ namespace {
 
     std::vector<StoCCallback> stoc_callbacks;
 
-    void UpdateActivityCallback(void*, const EDiscordResult result)
+    void DISCORD_API UpdateActivityCallback(void*, const EDiscordResult result)
     {
         Log::Log(result == DiscordResult_Ok ? "Activity updated successfully.\n" : "Activity update FAILED!\n");
     }
 
-    void OnJoinRequestReplyCallback(void*, const EDiscordResult result)
+    void DISCORD_API OnJoinRequestReplyCallback(void*, const EDiscordResult result)
     {
         Log::Log(result == DiscordResult_Ok ? "Join request reply sent successfully.\n" : "Join request reply send FAILED!\n");
     }
 
-    void OnSendInviteCallback(void*, const EDiscordResult result)
+    void DISCORD_API OnSendInviteCallback(void*, const EDiscordResult result)
     {
         Log::Log(result == DiscordResult_Ok ? "Invite sent successfully.\n" : "Invite send FAILED!\n");
     }
 
-    void OnNetworkMessage(void*, DiscordNetworkPeerId, DiscordNetworkChannelId, uint8_t*, const uint32_t)
+    void DISCORD_API OnNetworkMessage(void*, DiscordNetworkPeerId, DiscordNetworkChannelId, uint8_t*, const uint32_t)
     {
         Log::Log("Discord: Network message\n");
     }
 
-    void OnJoinParty([[maybe_unused]] void* event_data, const char* secret)
+    void DISCORD_API OnJoinParty([[maybe_unused]] void* event_data, const char* secret)
     {
         Log::Log("Discord: on_activity_join %s\n", secret);
         memset(&join_in_progress, 0, sizeof(join_in_progress));
@@ -257,18 +262,18 @@ namespace {
     }
 
     // NOTE: In our game, anyone can join anyone else's party - work around for "ask to join" by auto-accepting.
-    void OnJoinRequest([[maybe_unused]] void* data, DiscordUser* user)
+    void DISCORD_API OnJoinRequest([[maybe_unused]] void* data, DiscordUser* user)
     {
         Log::Log("Join request received from %s; automatically accept\n", user->username);
         app.activities->send_request_reply(app.activities, user->id, DiscordActivityJoinRequestReply_Yes, &app, OnJoinRequestReplyCallback);
     }
 
-    void OnPartyInvite([[maybe_unused]] void* event_data, EDiscordActivityActionType, DiscordUser* user, DiscordActivity*)
+    void DISCORD_API OnPartyInvite([[maybe_unused]] void* event_data, EDiscordActivityActionType, DiscordUser* user, DiscordActivity*)
     {
         Log::Log("Party invite received from %s\n", user->username);
     }
 
-    void OnDiscordLog([[maybe_unused]] void* data, const EDiscordLogLevel level, const char* message)
+    void DISCORD_API OnDiscordLog([[maybe_unused]] void* data, const EDiscordLogLevel level, const char* message)
     {
         Log::Log("Discord Log Level %d: %s\n", level, message);
     }
@@ -440,6 +445,21 @@ namespace {
             Log::LogW(L"Failed to LoadLibraryW %s\n", dll_location.c_str());
             return false;
         }
+
+        DiscordVersion_pt discordVersion = (DiscordVersion_pt)GetProcAddress(hGetProcIDDLL, "DiscordVersion");
+        if (!discordVersion) {
+            ASSERT(UnloadDll());
+            Log::LogW(L"Failed to find address for DiscordVersion\n");
+            return false;
+        }
+        int out[3] = { 0 };
+        const auto res = discordVersion(0, out);
+        if (res || *out != DISCORD_VERSION) {
+            ASSERT(UnloadDll());
+            Log::LogW(L"Discord version mismatch: %d %d.%d.%d\n", DISCORD_VERSION, out[0],out[1],out[2]);
+            return false;
+        }
+
         // resolve function address here
         discordCreate = (DiscordCreate_pt)(uintptr_t)GetProcAddress(hGetProcIDDLL, "DiscordCreate");
         if (!discordCreate) {

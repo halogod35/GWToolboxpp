@@ -19,7 +19,7 @@
 #include <GWCA/Utilities/Scanner.h>
 #include <Timer.h>
 #include <GWToolbox.h>
-
+#include <Utils/TextUtils.h>
 
 namespace {
     std::vector<TBHotkey*> hotkeys; // list of hotkeys
@@ -118,7 +118,7 @@ namespace {
         if (!me) {
             return false;
         }
-        const std::string player_name = GuiUtils::WStringToString(c->player_name);
+        const std::string player_name = TextUtils::WStringToString(c->player_name);
         const GW::Constants::InstanceType instance_type = GW::Map::GetInstanceType();
         const GW::Constants::MapID map_id = GW::Map::GetMapID();
         const auto primary = static_cast<GW::Constants::Profession>(me->primary);
@@ -509,6 +509,7 @@ void HotkeysWindow::DrawSettingsInternal()
     ToolboxWindow::DrawSettingsInternal();
     ImGui::Checkbox("Show 'Active' checkbox in header", &TBHotkey::show_active_in_header);
     ImGui::Checkbox("Show 'Run' button in header", &TBHotkey::show_run_in_header);
+    ImGui::SliderInt("Autoclicker delay (ms)", &HotkeyToggle::clicker_delay_ms, 1, 1'000);
 }
 
 void HotkeysWindow::LoadSettings(ToolboxIni* ini)
@@ -518,6 +519,7 @@ void HotkeysWindow::LoadSettings(ToolboxIni* ini)
 
     TBHotkey::show_active_in_header = ini->GetBoolValue(Name(), "show_active_in_header", false);
     TBHotkey::show_run_in_header = ini->GetBoolValue(Name(), "show_run_in_header", false);
+    HotkeyToggle::clicker_delay_ms = ini->GetLongValue(Name(), "clicker_delay_ms", HotkeyToggle::clicker_delay_ms);
 
     // clear hotkeys from toolbox
     for (const TBHotkey* hotkey : hotkeys) {
@@ -543,6 +545,7 @@ void HotkeysWindow::SaveSettings(ToolboxIni* ini)
     ToolboxWindow::SaveSettings(ini);
     ini->SetBoolValue(Name(), "show_active_in_header", TBHotkey::show_active_in_header);
     ini->SetBoolValue(Name(), "show_run_in_header", TBHotkey::show_run_in_header);
+    ini->SetLongValue(Name(), "clicker_delay_ms", HotkeyToggle::clicker_delay_ms);
 
     if (TBHotkey::hotkeys_changed || GWToolbox::SettingsFolderChanged()) {
         // clear hotkeys from ini
@@ -565,16 +568,20 @@ void HotkeysWindow::SaveSettings(ToolboxIni* ini)
 
 bool HotkeysWindow::WndProc(const UINT Message, const WPARAM wParam, LPARAM)
 {
+    if (Message == WM_LBUTTONUP && HotkeyToggle::processing) {
+        HotkeyToggle::processing = false;
+    }
     if (Message == WM_ACTIVATE) {
         OnWindowActivated(LOWORD(wParam) != WA_INACTIVE);
-        return false;
-    }
-    if (GW::Chat::GetIsTyping()) {
         return false;
     }
     if (GW::MemoryMgr::GetGWWindowHandle() != GetActiveWindow()) {
         return false;
     }
+    if (GW::Chat::GetIsTyping()) {
+        return false;
+    }
+
     long keyData = 0;
     switch (Message) {
         case WM_KEYDOWN:

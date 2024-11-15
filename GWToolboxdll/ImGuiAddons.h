@@ -8,9 +8,15 @@ namespace ImGui {
     // Return false to close the context menu
     using ImGuiContextMenuCallback = std::function<bool(void* wparam)>;
 
+    using ImGuiConfirmDialogCallback = std::function<void(bool result, void* wparam)>;
+
     IMGUI_API void SetContextMenu(ImGuiContextMenuCallback callback, void* wparam = nullptr);
 
     IMGUI_API void DrawContextMenu();
+
+    IMGUI_API void DrawConfirmDialog();
+
+    IMGUI_API void SetTooltip(std::function<void()> tooltip_callback);
 
     // Shorthand for ImGui::GetIO().GlobalFontScale
     IMGUI_API const float& FontScale();
@@ -32,9 +38,9 @@ namespace ImGui {
                            bool (*items_getter)(void* data, int idx, const char** out_text), void* data, int items_count);
 
     // Show a popup on-screen with a message and yes/no buttons. Returns true if an option has been chosen, with *result as true/false for yes/no
-    IMGUI_API bool ConfirmDialog(const char* message, bool* result);
+    IMGUI_API void ConfirmDialog(const char* message, ImGui::ImGuiConfirmDialogCallback callback, void* wparam = nullptr);
 
-    IMGUI_API bool SmallConfirmButton(const char* label, bool* confirm_bool, const char* confirm_content = "Are you sure you want to continue?");
+    IMGUI_API bool SmallConfirmButton(const char* label, const char* confirm_content, ImGui::ImGuiConfirmDialogCallback callback, void* wparam = nullptr);
     IMGUI_API bool ChooseKey(const char* label, char* buf, size_t buf_len, long* key_code);
 
     IMGUI_API bool ConfirmButton(const char* label, bool* confirm_bool, const char* confirm_content = "Are you sure you want to continue?");
@@ -50,6 +56,14 @@ namespace ImGui {
     IMGUI_API bool ColorButtonPicker(const char*, Color*, ImGuiColorEditFlags = 0);
     // Add cropped image to current window
     IMGUI_API void ImageCropped(ImTextureID user_texture_id, const ImVec2& size);
+
+    IMGUI_API void ImageFit(const ImTextureID user_texture_id, const ImVec2& size_of_container);
+
+    // Shim to cast
+    IMGUI_API bool IsKeyDown(long key);
+
+    // Shim to new ImageButton definition; an frame_padding isn't needed now.
+    IMGUI_API bool ImageButton(ImTextureID user_texture_id, const ImVec2& image_size, const ImVec2& uv0 = ImVec2(0, 0), const ImVec2& uv1 = ImVec2(1, 1), int frame_padding = -1, const ImVec4& bg_col = ImVec4(0, 0, 0, 0), const ImVec4& tint_col = ImVec4(1, 1, 1, 1));
 
     // Window/context independent check
     IMGUI_API bool IsMouseInRect(const ImVec2& top_left, const ImVec2& bottom_right);

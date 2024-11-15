@@ -60,6 +60,12 @@ namespace {
         return nullptr;
     }
 }
+std::wstring ItemDescriptionHandler::GetItemDescription(const GW::Item* _item) {
+    if (!_item) return L"";
+    wchar_t* out = nullptr;
+    OnGetItemDescription(_item->item_id, 0, 0, 0, nullptr, &out);
+    return out ? out : L"";
+}
 std::wstring ItemDescriptionHandler::GetItemEncNameWithoutMods(const GW::Item* _item) {
 
     auto item = (InventoryManager::Item*)_item;
@@ -99,11 +105,15 @@ std::wstring ItemDescriptionHandler::GetItemEncNameWithoutMods(const GW::Item* _
 }
 void ItemDescriptionHandler::Initialize()
 {
-    GetItemDescription_Func = reinterpret_cast<GetItemDescriptionCallback>(GW::Scanner::Find("\x8b\xc3\x25\xfd\x00\x00\x00\x3c\xfd", "xxxxxxxxx", -0x5f));
-    if (GetItemDescription_Func) {
+    const auto address = GW::Scanner::Find("\x8b\xc3\x25\xfd\x00\x00\x00\x3c\xfd", "xxxxxxxxx", -0x5f);
+    if (GW::Scanner::IsValidPtr(address, GW::Scanner::Section::TEXT)) {
+        GetItemDescription_Func = (GetItemDescriptionCallback)address;
         GW::HookBase::CreateHook((void**) & GetItemDescription_Func, OnGetItemDescription, (void**)&GetItemDescription_Ret);
         GW::HookBase::EnableHooks(GetItemDescription_Func);
     }
+#ifdef _DEBUG
+    ASSERT(GetItemDescription_Func);
+#endif
 }
 
 void ItemDescriptionHandler::SignalTerminate()

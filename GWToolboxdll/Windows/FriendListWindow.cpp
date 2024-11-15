@@ -148,7 +148,7 @@ namespace {
         CSimpleIni::TNamesDepend values{};
         inifile.GetAllValues(section, "charname", values);
         for (auto i = values.cbegin(); i != values.cend(); ++i) {
-            std::wstring char_wstr = GuiUtils::StringToWString(i->pItem);
+            std::wstring char_wstr = TextUtils::StringToWString(i->pItem);
             std::wstring temp;
             std::vector<std::wstring> parts{};
             std::wstringstream wss(char_wstr);
@@ -290,7 +290,7 @@ namespace {
 
     void OnPlayerNotOnline(GW::HookStatus* status, const wchar_t* message)
     {
-        const auto player_name = GuiUtils::GetPlayerNameFromEncodedString(message);
+        const auto player_name = TextUtils::GetPlayerNameFromEncodedString(message);
         if (const auto friend_ = FriendListWindow::GetFriend(player_name.c_str())) {
             // If this player is already in my friend list, send the message directly.
             if (!friend_->IsOffline() && friend_->current_char->getNameW() != player_name) {
@@ -318,7 +318,7 @@ namespace {
 
     void OnFriendAlreadyAdded(GW::HookStatus* status, const wchar_t* message)
     {
-        const auto player_name = GuiUtils::GetPlayerNameFromEncodedString(message);
+        const auto player_name = TextUtils::GetPlayerNameFromEncodedString(message);
         if (const auto friend_ = FriendListWindow::GetFriend(player_name.c_str())) {
             friend_->SetCharacter(player_name.c_str());
         }
@@ -376,13 +376,10 @@ namespace {
     };
     GW::HookEntry OnPreStoCPacket_Entry;
     void OnPreStoCPacket(GW::HookStatus* status, GW::Packet::StoC::PacketBase* pak) {
-        if (status->blocked)
-            return;
         switch (pak->header) {
         case GW::Packet::StoC::MessageLocal::STATIC_HEADER: 
         case GW::Packet::StoC::MessageGlobal::STATIC_HEADER: {
-            if (FriendListWindow::GetIsPlayerIgnored(pak))
-                status->blocked = true;
+            status->blocked |= FriendListWindow::GetIsPlayerIgnored(pak);
         } break;
         }
     }
@@ -392,19 +389,13 @@ namespace {
         if (status->blocked)
             return;
         switch (pak->header) {
-        case GW::Packet::StoC::TradeStart::STATIC_HEADER: {
-            if (FriendListWindow::GetIsPlayerIgnored(pak))
-                GW::Trade::CancelTrade();
-        } break;
         case GW::Packet::StoC::PartyInviteReceived_Create::STATIC_HEADER: {
-            if (FriendListWindow::GetIsPlayerIgnored(pak)) {
-                const auto p = (GW::Packet::StoC::PartyInviteReceived_Create*)pak;
-                GW::PartyMgr::RespondToPartyRequest(p->target_party_id, false);
-            }
+            if (FriendListWindow::GetIsPlayerIgnored(pak) && !GW::PartyMgr::RespondToPartyRequest(((uint32_t*)pak)[1], false))
+                Log::Warning("Failed to reject invite from ignored player");
         } break;
         case GW::Packet::StoC::PlayerJoinInstance::STATIC_HEADER: {
             const auto p = (GW::Packet::StoC::PlayerJoinInstance*)pak;
-            const auto player_name = GuiUtils::SanitizePlayerName(p->player_name);
+            const auto player_name = TextUtils::SanitizePlayerName(p->player_name);
             const auto a = GW::PlayerMgr::GetPlayerByName(p->player_name);
             const auto f = a && a->primary ? Instance().GetFriend(player_name.data()) : nullptr;
             const auto fc = f ? f->GetCharacter(player_name.data()) : nullptr;
@@ -418,36 +409,50 @@ namespace {
 
     std::vector<std::pair< const wchar_t*, GW::Chat::ChatCommandCallback>> chat_commands;
 
-    constexpr GW::UI::UIMessage OnUIMessage_Headers[] = {
-        GW::UI::UIMessage::kSetAgentNameTagAttribs,
-        GW::UI::UIMessage::kShowAgentNameTag,
-        GW::UI::UIMessage::kWriteToChatLog,
-        GW::UI::UIMessage::kOpenWhisper,
-        GW::UI::UIMessage::kSendChatMessage,
-        GW::UI::UIMessage::kPrintChatMessage
-    };
+    clock_t offline_status_reminder_last_sent = 0;
+    bool check_currently_offline_reminder = false;
 
+    clock_t pending_cancel_trade = 0;
 
     GW::HookEntry OnUIMessage_Entry;
     void OnUIMessage(GW::HookStatus* status, const GW::UI::UIMessage message_id, void* wparam, void*)
     {
         switch (message_id) {
+        case GW::UI::UIMessage::kTradeSessionStart:
+            // NB: At this point, the trade invitation window isn't drawn in the UI, so trying to cancel in the current frame would fail.
+            if (FriendListWindow::GetIsPlayerIgnored(((uint32_t*)wparam)[1])) {
+                pending_cancel_trade = TIMER_INIT();
+                // Block it globally, but trigger for the game control frame - this still creates the trade dialog allowing CancelTrade() to pass
+                status->blocked = true;
+                GW::UI::SendFrameUIMessage(GW::UI::GetChildFrame(GW::UI::GetFrameByLabel(L"Game"),6), message_id, wparam);
+            }
+            break;
         case GW::UI::UIMessage::kSetAgentNameTagAttribs:
         case GW::UI::UIMessage::kShowAgentNameTag: {
             if (GW::Map::GetInstanceType() != GW::Constants::InstanceType::Outpost || !friend_name_tag_enabled) {
                 break;
             }
             const auto tag = static_cast<GW::UI::AgentNameTagInfo*>(wparam);
-            const auto player_name = GuiUtils::GetPlayerNameFromEncodedString(tag->name_enc);
+            const auto player_name = TextUtils::GetPlayerNameFromEncodedString(tag->name_enc);
             const auto friend_ = FriendListWindow::GetFriend(player_name.c_str());
             if (friend_ && friend_->type == GW::FriendType::Friend) {
                 tag->text_color = friend_name_tag_color;
             }
-        }
-                                                 break;
+        }break;
+        // When starting a new whisper message, automatically check and redirect the recipient
+        case GW::UI::UIMessage::kStartWhisper: {
+            const auto packet = (GW::UI::UIPacket::kStartWhisper*)wparam;
+            if (const auto friend_ = FriendListWindow::GetFriend(packet->player_name)) {
+                const auto& friendname = friend_->current_char->getNameW();
+                if (!friend_->IsOffline() && friend_->current_char && friendname != packet->player_name) {
+                    // TODO; Would doing this cause a memory leak on the previous wchar_t* ?
+                    packet->player_name = const_cast<wchar_t*>(friendname.data());
+                }
+            }
+        } break;
         case GW::UI::UIMessage::kWriteToChatLog: {
-            const auto uimsg = static_cast<FriendListWindow::UIChatMessage*>(wparam);
-            wchar_t* message = uimsg->message;
+            const auto packet = (GW::UI::UIPacket::kWriteToChatLog*)wparam;
+            wchar_t* message = packet->message;
             switch (static_cast<MessageType>(message[0])) {
             case MessageType::CANNOT_ADD_YOURSELF_AS_A_FRIEND: // You cannot add yourself as a friend.
             case MessageType::EXCEEDED_MAX_NUMBER_OF_FRIENDS:  // You have exceeded the maximum number of characters on your Friends list.
@@ -460,6 +465,11 @@ namespace {
                 break;
             case MessageType::OUTGOING_WHISPER: // Server has successfully sent your whisper
                 OnOutgoingWhisperSuccess(status, message);
+                FriendListWindow::AddFriendAliasToMessage(&packet->message);
+                check_currently_offline_reminder = true;
+                break;
+            case MessageType::INCOMING_WHISPER:
+                FriendListWindow::AddFriendAliasToMessage(&packet->message);
                 break;
             case MessageType::PLAYER_X_NOT_ONLINE: // Player "" is not online. Redirect to the right person if we can find them!
                 OnPlayerNotOnline(status, message);
@@ -495,21 +505,20 @@ namespace {
             }
             // ...Otherwise carry on with the send
             pending_whisper.reset(target, text);
-        }
-                                                break;
-        case GW::UI::UIMessage::kPrintChatMessage: {
-            auto message = ((wchar_t**)wparam)[1];
-            switch (static_cast<MessageType>(*message)) {
-            case MessageType::INCOMING_WHISPER:
-            case MessageType::OUTGOING_WHISPER:
-                FriendListWindow::AddFriendAliasToMessage(&message);
-                break;
-            }
-        }
-                                                 break;
+        } break;
         }
     }
 
+    // If the player has just sent a whisper, but they're set to Offline status, put a message in chat to let them know.
+    void UpdateOfflineReminder() {
+        if (check_currently_offline_reminder) {
+            check_currently_offline_reminder = false;
+            if (TIMER_DIFF(offline_status_reminder_last_sent) > 10000 && GW::FriendListMgr::GetMyStatus() == GW::FriendStatus::Offline) {
+                offline_status_reminder_last_sent = TIMER_INIT();
+                Log::Flash("You're currently offline, and won't receive whispers.\nType '/online' in chat to set your status to Online.");
+            }
+        }
+    }
 
     /* Setters */
     // Update local friend record from raw info.
@@ -600,20 +609,27 @@ namespace {
     void CHAT_CMD_FUNC(CmdSetFriendListStatus)
     {
         std::wstring cmd = *argv;
-        bool res = false;
+        auto set = GW::FriendListMgr::GetMyStatus();
+        const auto current = set;
         if (cmd == L"away") {
-            res = GW::FriendListMgr::SetFriendListStatus(GW::FriendStatus::Away);
+            set = GW::FriendStatus::Away;
         }
         else if (cmd == L"online") {
-            res = GW::FriendListMgr::SetFriendListStatus(GW::FriendStatus::Online);
+            set = GW::FriendStatus::Online;
         }
         else if (cmd == L"offline") {
-            res = GW::FriendListMgr::SetFriendListStatus(GW::FriendStatus::Offline);
+            set = GW::FriendStatus::Offline;
         }
         else if (cmd == L"busy" || cmd == L"dnd") {
-            res = GW::FriendListMgr::SetFriendListStatus(GW::FriendStatus::DND);
+            set = GW::FriendStatus::DND;
+
         }
-        if (!res) {
+        if (current == set)
+            return;
+        if (GW::FriendListMgr::SetFriendListStatus(set)) {
+            Log::Flash("You're now %s", GetStatusText(set));
+        }
+        else {
             Log::ErrorW(L"Failed to set friend list status");
         }
     }
@@ -784,7 +800,7 @@ std::string FriendListWindow::Friend::GetCharactersHover(const bool include_char
             }
         }
         cached_charnames_hover_str =
-            GuiUtils::WStringToString(cached_charnames_hover_ws);
+            TextUtils::WStringToString(cached_charnames_hover_ws);
         cached_charnames_hover = true;
     }
     std::string str;
@@ -806,6 +822,7 @@ std::string FriendListWindow::Friend::GetCharactersHover(const bool include_char
 // Find existing record for friend by char name.
 FriendListWindow::Friend* FriendListWindow::GetFriend(const wchar_t* name)
 {
+    if (!(name && *name)) return nullptr;
     const auto it = uuid_by_name.find(name);
     return it == uuid_by_name.end() ? nullptr : it->second;
 }
@@ -848,6 +865,17 @@ void FriendListWindow::Initialize()
     ToolboxWindow::Initialize();
 
     GW::FriendListMgr::RegisterFriendStatusCallback(&FriendStatusUpdate_Entry, OnFriendUpdated);
+
+
+    constexpr GW::UI::UIMessage OnUIMessage_Headers[] = {
+        GW::UI::UIMessage::kStartWhisper,
+        GW::UI::UIMessage::kSetAgentNameTagAttribs,
+        GW::UI::UIMessage::kShowAgentNameTag,
+        GW::UI::UIMessage::kWriteToChatLog,
+        GW::UI::UIMessage::kOpenWhisper,
+        GW::UI::UIMessage::kSendChatMessage,
+        GW::UI::UIMessage::kTradeSessionStart
+    };
 
     for (const auto message_id : OnUIMessage_Headers) {
         RegisterUIMessageCallback(&OnUIMessage_Entry, message_id, OnUIMessage);
@@ -938,12 +966,18 @@ void FriendListWindow::AddFriendAliasToMessage(wchar_t** message_ptr)
 
 void FriendListWindow::Update(const float)
 {
-    if (loading) {
+    if (loading || !GW::Map::GetIsMapLoaded()) {
         return;
     }
-    if (!GW::Map::GetIsMapLoaded()) {
-        return;
+    if (pending_cancel_trade) {
+        if (GW::Trade::CancelTrade())
+            pending_cancel_trade = 0;
+        else if (TIMER_DIFF(pending_cancel_trade) > 1000) {
+            pending_cancel_trade = 0;
+            Log::Warning("Failed to reject trade from ignored player");
+        }
     }
+
     const GW::FriendList* fl = GW::FriendListMgr::GetFriendList();
     friend_list_ready = fl && fl->friends.valid();
     if (!friend_list_ready) {
@@ -956,6 +990,7 @@ void FriendListWindow::Update(const float)
         }
     }
     UpdatePendingWhisper();
+    UpdateOfflineReminder();
 }
 
 void FriendListWindow::Poll()
@@ -1228,14 +1263,6 @@ void FriendListWindow::DrawSettingsInternal()
     ImGui::SameLine();
     ImGui::Text("in explorable");
 
-    ImGui::Text("Show as");
-    ImGui::SameLine();
-    ImGui::PushItemWidth(dropdown_width);
-    ImGui::Combo("###show_as_loading", &loading_show_as, "Window\0Widget\0Hidden");
-    ImGui::PopItemWidth();
-    ImGui::SameLine();
-    ImGui::Text("while loading");
-
     ImGui::Checkbox("Temporarily add offline players you whisper as friends", &add_offline_players_to_friends);
     ImGui::ShowHelp("When you whisper someone and they are offline, toolbox will attempt to add these players to your friendlist"
         " to figure out if they are online on another character.\nIf they are, toolbox will redirect your whisper to that character instead.\n"
@@ -1361,7 +1388,7 @@ void FriendListWindow::LoadFromFile()
             auto lf = new Friend(this);
             lf->uuid = entry.pItem;
             lf->uuid_bytes = StringToGuid(lf->uuid);
-            lf->setAlias(GuiUtils::StringToWString(inifile.GetValue(entry.pItem, "alias", "")));
+            lf->setAlias(TextUtils::StringToWString(inifile.GetValue(entry.pItem, "alias", "")));
             lf->type = static_cast<GW::FriendType>(inifile.GetLongValue(entry.pItem, "type", static_cast<long>(lf->type)));
             if (lf->uuid.empty() || lf->GetAliasW().empty()) {
                 delete lf;
@@ -1428,7 +1455,7 @@ void FriendListWindow::SaveToFile()
             for (const auto& char_it : charnames) {
                 char charname[128] = {0};
                 snprintf(charname, 128, "%s,%d",
-                         GuiUtils::WStringToString(char_it.first).c_str(),
+                         TextUtils::WStringToString(char_it.first).c_str(),
                          char_it.second);
                 inifile.SetValue(uuid, "charname", charname);
             }

@@ -1,7 +1,5 @@
 #pragma once
 
-#include <Utils/GuiUtils.h>
-
 #ifdef RGB
 #undef RGB
 #endif
@@ -9,7 +7,7 @@
 using Color = ImU32;
 
 namespace Colors {
-    static Color ARGB(const int a, const int r, const int g, const int b)
+    static constexpr Color ARGB(const int a, const int r, const int g, const int b)
     {
         return static_cast<Color>(a) << IM_COL32_A_SHIFT |
                static_cast<Color>(r) << IM_COL32_R_SHIFT |
@@ -17,7 +15,7 @@ namespace Colors {
                static_cast<Color>(b) << IM_COL32_B_SHIFT;
     }
 
-    static Color RGB(const int r, const int g, const int b)
+    static constexpr Color RGB(const int r, const int g, const int b)
     {
         return 0xFFu << IM_COL32_A_SHIFT |
                static_cast<Color>(r) << IM_COL32_R_SHIFT |
@@ -25,28 +23,60 @@ namespace Colors {
                static_cast<Color>(b) << IM_COL32_B_SHIFT;
     }
 
-    static Color FullAlpha(const Color clr)
+    static constexpr Color FullAlpha(const Color clr)
     {
         return clr | 0xFFu << IM_COL32_A_SHIFT;
     }
 
-    static Color Black() { return RGB(0, 0, 0); }
-    static Color White() { return RGB(0xFF, 0xFF, 0xFF); }
-    static Color Empty() { return ARGB(0, 0, 0, 0); }
+    static constexpr Color Black() { return RGB(0, 0, 0); }
+    static constexpr Color White() { return RGB(0xFF, 0xFF, 0xFF); }
+    static constexpr Color Empty() { return ARGB(0, 0, 0, 0); }
 
-    static Color Red() { return RGB(0xFF, 0x0, 0x0); }
-    static Color Green() { return RGB(0x0, 0xFF, 0x0); }
-    static Color Yellow() { return RGB(0xFF, 0xFF, 0x0); }
-    static Color Blue() { return RGB(0x0, 0x0, 0xFF); }
+    static constexpr Color Red() { return RGB(0xFF, 0x0, 0x0); }
+    static constexpr Color Green() { return RGB(0x0, 0xFF, 0x0); }
+    static constexpr Color Yellow() { return RGB(0xFF, 0xFF, 0x0); }
+    static constexpr Color Blue() { return RGB(0x0, 0x0, 0xFF); }
+
+    static constexpr Color MaterialRed() { return RGB(213, 0, 0); }
+    static constexpr Color Pink() { return RGB(197, 17, 98); }
+    static constexpr Color Purple() { return RGB(170, 0, 255); }
+    static constexpr Color DeepPurple() { return RGB(98, 0, 234); }
+    static constexpr Color Indigo() { return RGB(48, 79, 254); }
+    static constexpr Color MaterialBlue() { return RGB(41, 98, 255); }
+    static constexpr Color LightBlue() { return RGB(0, 145, 234); }
+    static constexpr Color Cyan() { return RGB(0, 184, 212); }
+    static constexpr Color Teal() { return RGB(0, 191, 165); }
+    static constexpr Color MaterialYellow() { return RGB(255, 214, 0); }
+    static constexpr Color Amber() { return RGB(255, 171, 0); }
+    static constexpr Color Orange() { return RGB(255, 109, 0); }
+    static constexpr Color DeepOrange() { return RGB(221, 44, 0); }
+    static constexpr Color MaterialGreen() { return RGB(56, 142, 60); }
+    static constexpr Color Lime() { return RGB(174, 234, 0); }
+    static constexpr Color Magenta() { return RGB(213, 0, 249); }
+    static constexpr Color Gold() { return RGB(255, 241, 118); }
+    static constexpr Color BlueGrey() { return RGB(96, 125, 139); }
+    static constexpr Color Grey() { return RGB(158, 158, 158); }
 
     static Color Load(const ToolboxIni* ini, const char* section, const char* key, const Color def)
     {
+        auto ParseUInt = [](const char* str, unsigned int* val, const int base)
+        {
+            char* end;
+            if (!str) {
+                return false;
+            }
+            *val = strtoul(str, &end, base);
+            if (str == end || errno == ERANGE) {
+                return false;
+            }
+            return true;
+        };
         const char* wc = ini->GetValue(section, key, nullptr);
         if (wc == nullptr) {
             return def;
         }
         unsigned int c;
-        if (GuiUtils::ParseUInt(wc, &c, 16)) {
+        if (ParseUInt(wc, &c, 16)) {
             return c;
         }
         return def;

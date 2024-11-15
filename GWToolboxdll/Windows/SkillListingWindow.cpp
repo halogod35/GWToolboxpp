@@ -11,6 +11,7 @@
 
 #include <Modules/Resources.h>
 #include <Windows/SkillListingWindow.h>
+#include <Utils/TextUtils.h>
 
 static uintptr_t skill_array_addr;
 
@@ -178,13 +179,13 @@ void SkillListingWindow::Draw(IDirect3DDevice9*)
     char buf[16] = {};
     static std::wstring search_term;
     if (ImGui::InputText("Search", buf, sizeof buf)) {
-        search_term = GuiUtils::ToLower(GuiUtils::StringToWString(buf));
+        search_term = TextUtils::ToLower(TextUtils::StringToWString(buf));
     }
     for (size_t i = 0; i < skills.size(); i++) {
         if (!skills[i]) {
             continue;
         }
-        if (!search_term.empty() && GuiUtils::ToLower(skills[i]->Name()).find(search_term) == std::wstring::npos) {
+        if (!search_term.empty() && TextUtils::ToLower(skills[i]->Name()).find(search_term) == std::wstring::npos) {
             continue;
         }
         offset = 0;
@@ -226,9 +227,9 @@ void SkillListingWindow::Draw(IDirect3DDevice9*)
 nlohmann::json SkillListingWindow::Skill::ToJson()
 {
     nlohmann::json json;
-    json["n"] = GuiUtils::WStringToString(Name());
-    json["d"] = GuiUtils::WStringToString(GWWDescription());
-    json["cd"] = GuiUtils::WStringToString(GWWConcise());
+    json["n"] = TextUtils::WStringToString(Name());
+    json["d"] = TextUtils::WStringToString(GWWDescription());
+    json["cd"] = TextUtils::WStringToString(GWWConcise());
     json["t"] = skill->type;
     json["p"] = skill->profession;
     json["a"] = IsPvE() ? 255 - skill->title : (int)skill->attribute;

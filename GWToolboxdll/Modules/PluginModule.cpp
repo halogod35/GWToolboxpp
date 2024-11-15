@@ -11,6 +11,7 @@
 #include <string>
 
 #include "GWCA/Managers/UIMgr.h"
+#include "Utils/TextUtils.h"
 
 namespace {
     std::wstring pluginsfoldername;
@@ -58,14 +59,14 @@ namespace {
         }
         if (!plugin.dll) {
             UnloadPlugin(plugin_ptr);
-            Log::Error("Failed to load plugin %s (LoadLibraryW)", plugin.path.filename().string().c_str());
+            Log::Error("Failed to load plugin %s (LoadLibraryW)", TextUtils::PrintFilename(plugin.path.filename().string()).c_str());
             return false;
         }
         using ToolboxPluginInstanceFn = ToolboxPlugin* (*)();
         const auto instance_fn = reinterpret_cast<ToolboxPluginInstanceFn>(GetProcAddress(plugin.dll, "ToolboxPluginInstance"));
         if (!instance_fn) {
             UnloadPlugin(plugin_ptr);
-            Log::Error("Failed to load plugin %s (ToolboxPluginInstance)", plugin.path.filename().string().c_str());
+            Log::Error("Failed to load plugin %s (ToolboxPluginInstance)", TextUtils::PrintFilename(plugin.path.filename().string()).c_str());
             return false;
         }
 
@@ -146,7 +147,7 @@ void PluginModule::DrawSettingsInternal()
             sprintf(buf, "             %s", plugin->path.filename().string().c_str());
         }
         const auto pos = ImGui::GetCursorScreenPos();
-        const bool is_showing = has_settings ? ImGui::CollapsingHeader(buf, ImGuiTreeNodeFlags_AllowItemOverlap) : ImGui::CollapsingHeader(buf, ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_AllowItemOverlap);
+        const bool is_showing = has_settings ? ImGui::CollapsingHeader(buf, ImGuiTreeNodeFlags_AllowOverlap) : ImGui::CollapsingHeader(buf, ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_AllowOverlap);
 
         if (const auto icon = plugin->initialized ? plugin->instance->Icon() : nullptr) {
             const float text_offset_x = ImGui::GetTextLineHeightWithSpacing() + 4.0f; // TODO: find a proper number
@@ -224,21 +225,6 @@ void PluginModule::Initialize()
 
 void PluginModule::Draw(IDirect3DDevice9* device)
 {
-    static bool message_displayed = false;
-    if (!plugins_loaded.empty() && !message_displayed) {
-        GW::Chat::WriteChat(
-            GW::Chat::Channel::CHANNEL_GWCA2,
-            L"<c=#FFFF00>Plugins detected, these may be unsafe to use and are not officially supported by GWToolbox++ developers.\n"
-            "Use at your own risk if you trust the author.\n"
-            "Do not report bugs that occur while you play with plugins.</c>", GWTOOLBOX_SENDER);
-        GW::Chat::WriteChat(
-            GW::Chat::Channel::CHANNEL_GWCA2,
-            L"<c=#FF0000>Plugins are NOT permitted by ArenaNet.</c>", GWTOOLBOX_SENDER);
-        GW::Chat::WriteChat(
-            GW::Chat::Channel::CHANNEL_WARNING,
-            L"Plugins are NOT permitted by ArenaNet.");
-        message_displayed = true;
-    }
     for (const auto plugin : plugins_loaded) {
         if (!InitializePlugin(plugin)) {
             continue;
@@ -294,7 +280,24 @@ void PluginModule::SaveSettings(ToolboxIni* ini)
 
 void PluginModule::Update(const float delta)
 {
+    static bool message_displayed = false;
+    if (!plugins_loaded.empty() && !message_displayed) {
+        GW::Chat::WriteChat(
+            GW::Chat::Channel::CHANNEL_GWCA2,
+            L"<c=#FFFF00>Plugins detected, these may be unsafe to use and are not officially supported by GWToolbox++ developers.\n"
+            "Use at your own risk if you trust the author.\n"
+            "Do not report bugs that occur while you play with plugins.</c>", GWTOOLBOX_SENDER, true);
+        GW::Chat::WriteChat(
+            GW::Chat::Channel::CHANNEL_GWCA2,
+            L"<c=#FF0000>Plugins are NOT permitted by ArenaNet.</c>", GWTOOLBOX_SENDER, true);
+        GW::Chat::WriteChat(
+            GW::Chat::Channel::CHANNEL_WARNING,
+            L"Plugins are NOT permitted by ArenaNet.", nullptr, true);
+        message_displayed = true;
+    }
     for (const auto plugin : plugins_loaded) {
+        if (!plugin->initialized)
+            continue;
         plugin->instance->Update(delta);
         if (plugin->terminating) {
             if (UnloadPlugin(plugin)) {

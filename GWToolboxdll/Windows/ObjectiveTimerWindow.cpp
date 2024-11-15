@@ -28,6 +28,7 @@
 #include <GWToolbox.h>
 #include <Utils/GuiUtils.h>
 #include <Logger.h>
+#include <GWCA/Context/CharContext.h>
 
 constexpr uint32_t TIME_UNKNOWN = std::numeric_limits<uint32_t>::max();
 unsigned int ObjectiveTimerWindow::ObjectiveSet::cur_ui_id = 0;
@@ -137,7 +138,7 @@ namespace {
     void PrintTime(char* buf, const size_t size, const DWORD time, const bool show_ms = true)
     {
         if (time == TIME_UNKNOWN) {
-            GuiUtils::StrCopy(buf, "--:--", size);
+            std::snprintf(buf, size, "%s", "--:--");
         }
         else {
             const DWORD sec = time / 1000;
@@ -222,13 +223,16 @@ void ObjectiveTimerWindow::Initialize()
 
     // NB: Server may not send packets in the order we want them
     // e.g. InstanceLoadInfo comes in before ExamplePlugin which means the run start is whacked out
-    // keep track of the packets and only trigger relevent events when the needed packets are in.
-    GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::InstanceLoadInfo>(&InstanceLoadInfo_Entry,
-                                                                             [this](GW::HookStatus*, const GW::Packet::StoC::InstanceLoadInfo* packet) {
-                                                                                 InstanceLoadInfo = new GW::Packet::StoC::InstanceLoadInfo;
-                                                                                 memcpy(InstanceLoadInfo, packet, sizeof(GW::Packet::StoC::InstanceLoadInfo));
-                                                                                 CheckIsMapLoaded();
-                                                                             });
+    // keep track of the packets and only trigger relevant events when the needed packets are in.
+    GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::InstanceLoadInfo>(
+        &InstanceLoadInfo_Entry,
+        [this](GW::HookStatus*, const GW::Packet::StoC::InstanceLoadInfo* packet) {
+            InstanceLoadInfo = new GW::Packet::StoC::InstanceLoadInfo;
+            memcpy(InstanceLoadInfo, packet, sizeof(GW::Packet::StoC::InstanceLoadInfo));
+            CheckIsMapLoaded();
+            if (!GW::GetCharContext() || current_objective_set && current_objective_set->character_name != GW::GetCharContext()->player_name)
+                StopObjectives();
+        });
     GW::StoC::RegisterPostPacketCallback<GW::Packet::StoC::InstanceLoadFile>(
         &InstanceLoadFile_Entry, [this](GW::HookStatus*, const GW::Packet::StoC::InstanceLoadFile* packet) {
             InstanceLoadFile = new GW::Packet::StoC::InstanceLoadFile;
@@ -280,21 +284,23 @@ void ObjectiveTimerWindow::Initialize()
             map_load_pending = true;
         }, -5);
     // packet hooks that trigger events:
-    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MessageServer>(&MessageServer_Entry,
-                                                                      [this](GW::HookStatus*, GW::Packet::StoC::MessageServer*) {
-                                                                          const GW::Array<wchar_t>* buff = &GW::GetGameContext()->world->message_buff;
-                                                                          if (!buff || !buff->valid() || !buff->size()) {
-                                                                              return; // Message buffer empty!?
-                                                                          }
-                                                                          const wchar_t* msg = buff->begin();
-                                                                          // NB: buff->size() includes null terminating char. All GW strings are null terminated, use wcslen instead
-                                                                          Event(EventType::ServerMessage, wcslen(msg), msg);
-                                                                      });
-    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::DisplayDialogue>(&DisplayDialogue_Entry,
-                                                                        [this](GW::HookStatus*, const GW::Packet::StoC::DisplayDialogue* packet) {
-                                                                            // NB: All GW strings are null terminated, use wcslen to avoid having to check all 122 chars
-                                                                            Event(EventType::DisplayDialogue, wcslen(packet->message), packet->message);
-                                                                        });
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::MessageServer>(
+        &MessageServer_Entry,
+        [this](GW::HookStatus*, GW::Packet::StoC::MessageServer*) {
+            const GW::Array<wchar_t>* buff = &GW::GetGameContext()->world->message_buff;
+            if (!buff || !buff->valid() || !buff->size()) {
+                return; // Message buffer empty!?
+            }
+            const wchar_t* msg = buff->begin();
+            // NB: buff->size() includes null terminating char. All GW strings are null terminated, use wcslen instead
+            Event(EventType::ServerMessage, wcslen(msg), msg);
+        });
+    GW::StoC::RegisterPacketCallback<GW::Packet::StoC::DisplayDialogue>(
+        &DisplayDialogue_Entry,
+        [this](GW::HookStatus*, const GW::Packet::StoC::DisplayDialogue* packet) {
+            // NB: All GW strings are null terminated, use wcslen to avoid having to check all 122 chars
+            Event(EventType::DisplayDialogue, wcslen(packet->message), packet->message);
+        });
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::ManipulateMapObject>(
         &ManipulateMapObject_Entry, [this](GW::HookStatus*, const GW::Packet::StoC::ManipulateMapObject* packet) {
             if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Explorable) {
@@ -331,9 +337,9 @@ void ObjectiveTimerWindow::Initialize()
         });
     GW::StoC::RegisterPacketCallback(
         &CountdownStart_Enty, GAME_SMSG_INSTANCE_COUNTDOWN,
-             [this](GW::HookStatus*, GW::Packet::StoC::PacketBase*) {
-                 Event(EventType::CountdownStart, std::to_underlying(GW::Map::GetMapID()));
-             });
+        [this](GW::HookStatus*, GW::Packet::StoC::PacketBase*) {
+            Event(EventType::CountdownStart, std::to_underlying(GW::Map::GetMapID()));
+        });
     GW::StoC::RegisterPacketCallback<GW::Packet::StoC::DungeonReward>(
         &DungeonReward_Entry, [this](GW::HookStatus*, GW::Packet::StoC::DungeonReward*) {
             Event(EventType::DungeonReward);
@@ -1106,11 +1112,11 @@ void ObjectiveTimerWindow::StopObjectives()
 // =============================================================================
 
 ObjectiveTimerWindow::Objective::Objective(const char* _name)
-    : start(TIME_UNKNOWN)
-    , done(TIME_UNKNOWN)
-    , duration(TIME_UNKNOWN)
+    : start(TIME_UNKNOWN),
+      done(TIME_UNKNOWN),
+      duration(TIME_UNKNOWN)
 {
-    GuiUtils::StrCopy(name, _name, sizeof(name));
+    std::snprintf(name, _countof(name), "%s", _name);
 }
 
 ObjectiveTimerWindow::Objective* ObjectiveTimerWindow::Objective::AddStartEvent(
@@ -1425,11 +1431,12 @@ void ObjectiveTimerWindow::ObjectiveSet::CheckSetDone()
 }
 
 ObjectiveTimerWindow::ObjectiveSet::ObjectiveSet()
-    : ui_id(cur_ui_id++)
+    : system_time(static_cast<DWORD>(time(nullptr))),
+      duration(TIME_UNKNOWN),
+      ui_id(cur_ui_id++)
 {
-    system_time = static_cast<DWORD>(time(nullptr));
     run_start_time_point = TimerWidget::Instance().GetStartPoint() != TIME_UNKNOWN ? TimerWidget::Instance().GetStartPoint() : time_point_ms();
-    duration = TIME_UNKNOWN;
+    character_name = GW::GetCharContext() ? GW::GetCharContext()->player_name : L"";
 }
 
 ObjectiveTimerWindow::ObjectiveSet::~ObjectiveSet()

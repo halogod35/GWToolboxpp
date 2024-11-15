@@ -14,19 +14,16 @@
 */
 
 #include "stdafx.h"
-#include <Psapi.h>
-#include <Defines.h>
-
 #include <GWCA/Managers/ChatMgr.h>
 
-#include <Utils/GuiUtils.h>
+#include <Defines.h>
+
 #include <ImGuiAddons.h>
 
 #include <Modules/Resources.h>
 #include <Modules/TeamspeakModule.h>
 #include <Timer.h>
-
-#include <Defines.h>
+#include <Utils/TextUtils.h>
 
 namespace {
     const char* teamspeak3_host = "127.0.0.1";
@@ -322,7 +319,7 @@ namespace {
         Log::Log("Teamspeak 3 auth response:\n%s", response->content.c_str());
 
         if (user_invoked) {
-            Log::Info("Teamspeak 3 connected");
+            Log::Flash("Teamspeak 3 connected");
         }
 
         GW::Chat::CreateCommand(L"ts", OnTeamspeakCommand);
@@ -400,7 +397,7 @@ namespace {
         }
         wchar_t buf[120];
         swprintf(buf, _countof(buf) - 1, L"%s (%d users)",
-                 GuiUtils::StringToWString(teamspeak_server->name).c_str(),
+                 TextUtils::StringToWString(teamspeak_server->name).c_str(),
                  teamspeak_server->user_count);
         GW::Chat::SendChat('#', buf);
 

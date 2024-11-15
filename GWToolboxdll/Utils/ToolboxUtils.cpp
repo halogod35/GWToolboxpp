@@ -23,14 +23,118 @@
 #include <GWCA/Packets/StoC.h>
 
 #include <GWCA/Managers/FriendListMgr.h>
-#include <Utils/GuiUtils.h>
 
 #include "ToolboxUtils.h"
+#include <GWCA/Utilities/Scanner.h>
+#include <Utils/TextUtils.h>
+#include <GWCA/Context/MapContext.h>
+#include <GWCA/Managers/UIMgr.h>
+#include <GWCA/Managers/GameThreadMgr.h>
 
 namespace {
+    
+    typedef UUID* (__cdecl* PortalGetUserId_pt)();
+    PortalGetUserId_pt PortalGetUserId_Func = 0;
+
+    GW::Array<GW::AvailableCharacterInfo>* available_chars_ptr = nullptr;
+    
     bool IsInfused(const GW::Item* item)
     {
         return item && item->info_string && wcschr(item->info_string, 0xAC9);
+    }
+}
+
+namespace GW {
+    void WaitForFrame(const wchar_t* frame_label, OnGotFrame_Callback callback) {
+        if (const auto frame = GW::UI::GetFrameByLabel(frame_label)) {
+            callback(frame);
+        }
+        else {
+            GW::UI::RegisterCreateUIComponentCallback((GW::HookEntry*)callback, [frame_label, callback](GW::UI::CreateUIComponentPacket* packet) {
+                if (packet && packet->component_label && wcscmp(packet->component_label, frame_label) == 0) {
+                    const auto frame = GW::UI::GetFrameByLabel(frame_label);
+                    ASSERT(frame);
+                    callback(frame);
+                    GW::GameThread::Enqueue([callback]() {
+                        GW::UI::RemoveCreateUIComponentCallback((GW::HookEntry*)callback);
+                        });
+                }
+                },0x4000);
+        }
+    }
+
+    namespace Map {
+        bool GetMapWorldMapBounds(GW::AreaInfo* map, ImRect* out) {
+            if (!map) return false;
+            auto bounds = &map->icon_start_x;
+            if (*bounds == 0)
+                bounds = &map->icon_start_x_dupe;
+
+            // NB: Even though area info holds map bounds as uints, the world map uses signed floats anyway - a cast should be fine here.
+            *out = {
+                { static_cast<float> (bounds[0]), static_cast<float>(bounds[1]) },
+                { static_cast<float> (bounds[2]), static_cast<float>(bounds[3]) }
+            };
+            return true;
+        }
+        GW::Array<GW::MapProp*>* GetMapProps() {
+            const auto m = GetMapContext();
+            const auto p = m ? m->props : nullptr;
+            return p ? &p->propArray : nullptr;
+        }
+    }
+    namespace PartyMgr {
+        GW::PlayerPartyMemberArray* GetPartyPlayers(uint32_t party_id) {
+            const auto party = GW::PartyMgr::GetPartyInfo(party_id);
+            return party ? &party->players : nullptr;
+        }
+        size_t GetPlayerPartyIndex(uint32_t player_number, uint32_t party_id) {
+            const auto players = GetPartyPlayers(party_id);
+            if (!players) return 0;
+            for (size_t i = 0, size = players->size(); i < size; i++) {
+                if (players->at(i).login_number == player_number)
+                    return i + 1;
+            }
+            return 0;
+        }
+    }
+    namespace AccountMgr {
+        GW::Array<AvailableCharacterInfo>* GetAvailableChars() {
+            if (available_chars_ptr)
+                return available_chars_ptr;
+            const uintptr_t address = GW::Scanner::Find("\x8b\x35\x00\x00\x00\x00\x57\x69\xF8\x84\x00\x00\x00", "xx????xxxxxxx", 0x2);
+            ASSERT(address);
+            available_chars_ptr = *(GW::Array<AvailableCharacterInfo>**)address;
+            return available_chars_ptr;
+        }
+        const wchar_t* GetCurrentPlayerName()
+        {
+            const auto c = GetCharContext();
+            return c ? c->player_name : nullptr;
+        }
+        const wchar_t* GetAccountEmail()
+        {
+            const auto c = GetCharContext();
+            return c ? c->player_email : nullptr;
+        }
+        const UUID* GetPortalAccountUuid()
+        {
+            if (!PortalGetUserId_Func) {
+                HMODULE hPortalDll = GetModuleHandle("GwLoginClient.dll");
+                PortalGetUserId_Func = hPortalDll ? (PortalGetUserId_pt)GetProcAddress(hPortalDll, "PortalGetUserId") : nullptr;
+            }
+            return PortalGetUserId_Func ? PortalGetUserId_Func() : nullptr;
+        }
+        AvailableCharacterInfo* GetAvailableCharacter(const wchar_t* name) {
+            const auto characters = name ? GetAvailableChars() : nullptr;
+            if (!characters)
+                return nullptr;
+            for (auto& ac : *characters) {
+                if (wcscmp(ac.player_name, name) == 0)
+                    return &ac;
+            }
+            return nullptr;
+        }
     }
 }
 
@@ -111,7 +215,7 @@ namespace ToolboxUtils {
         if (!_name) {
             return nullptr;
         }
-        const std::wstring name = GuiUtils::SanitizePlayerName(_name);
+        const std::wstring name = TextUtils::SanitizePlayerName(_name);
         GW::PlayerArray* players = GW::PlayerMgr::GetPlayerArray();
         if (!players) {
             return nullptr;
@@ -120,7 +224,7 @@ namespace ToolboxUtils {
             if (!player.name) {
                 continue;
             }
-            if (name == GuiUtils::SanitizePlayerName(player.name)) {
+            if (name == TextUtils::SanitizePlayerName(player.name)) {
                 return &player;
             }
         }
@@ -141,7 +245,7 @@ namespace ToolboxUtils {
         else {
             player = GW::PlayerMgr::GetPlayerByID(player_number);
         }
-        return player && player->name ? GuiUtils::SanitizePlayerName(player->name) : L"";
+        return player && player->name ? TextUtils::SanitizePlayerName(player->name) : L"";
     }
 
     GW::Array<wchar_t>* GetMessageBuffer()

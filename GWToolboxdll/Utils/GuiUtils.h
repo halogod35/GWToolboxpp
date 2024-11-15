@@ -5,83 +5,33 @@
 #include <nlohmann/json.hpp>
 #include <ToolboxIni.h>
 
-#ifndef DLLAPI
-#ifdef GWCA_IMPORT
-#define DLLAPI __declspec(dllimport)
-#else
-#define DLLAPI extern "C" __declspec(dllexport)
-#endif
-#endif
-
 namespace GW::Constants {
     enum class Language;
 }
 
 namespace GuiUtils {
     template <typename T>
-    concept map_type = std::same_as<T,
-                                    std::map<typename T::key_type, typename T::mapped_type, typename T::key_compare, typename T::allocator_type>> ||
-                       std::same_as<T, std::unordered_map<typename T::key_type, typename T::mapped_type, typename T::hasher,
-                                                          typename T::key_equal, typename T::allocator_type>>;
+    concept map_type =
+        std::same_as<
+            T,
+            std::map<typename T::key_type, typename T::mapped_type, typename T::key_compare, typename T::allocator_type>> ||
+        std::same_as<
+            T,
+            std::unordered_map<typename T::key_type, typename T::mapped_type, typename T::hasher, typename T::key_equal, typename T::allocator_type>>;
 
-    enum class FontSize {
-        text,
-        header2,
-        header1,
-        widget_label,
-        widget_small,
-        widget_large
-    };
-
-    void LoadFonts();
     std::string WikiUrl(const std::wstring& term);
     std::string WikiUrl(const std::string& term);
     std::string WikiTemplateUrlFromTitle(const std::string& title);
     std::string WikiTemplateUrlFromTitle(const std::wstring& title);
     void OpenWiki(const std::wstring& term);
     void SearchWiki(const std::wstring& term);
-    bool FontsLoaded();
-    DLLAPI ImFont* GetFont(FontSize size);
+    std::string SanitizeWikiUrl(std::string s);
 
     float GetPartyHealthbarHeight();
     float GetGWScaleMultiplier(bool force = false);
 
     // Reposition a rect within its container to make sure it isn't overflowing it.
     ImVec4& ClampRect(ImVec4& rect, const ImVec4& viewport);
-
-    std::string ToSlug(std::string s);
-    std::wstring ToSlug(std::wstring s);
-    std::string ToLower(std::string s);
-    std::wstring ToLower(std::wstring s);
-    std::wstring UrlEncode(const std::wstring& s, char space_token = '_');
-    std::string UrlEncode(const std::string& s, char space_token = '_');
-    std::string HtmlEncode(const std::string& s);
-    std::wstring RemovePunctuation(std::wstring s);
-    std::string RemovePunctuation(std::string s);
-    std::wstring RemoveDiacritics(const std::wstring& s);
-
-    std::string WStringToString(std::wstring_view str);
-    std::wstring StringToWString(std::string_view str);
-    std::string SanitiseFilename(std::string_view str);
-    std::wstring SanitiseFilename(std::wstring_view str);
-    std::wstring SanitizePlayerName(std::wstring_view str);
-
-    // Extract first unencoded substring from gw encoded string. Pass second and third args to know where the player name was found in the original string.
-    std::wstring GetPlayerNameFromEncodedString(const wchar_t* message, const wchar_t** start_pos_out = nullptr, const wchar_t** out_pos_out = nullptr);
-
-    bool ParseInt(const char* str, int* val, int base = 0);
-    bool ParseInt(const wchar_t* str, int* val, int base = 0);
-
-    bool ParseUInt(const char* str, unsigned int* val, int base = 0);
-    bool ParseUInt(const wchar_t* str, unsigned int* val, int base = 0);
-
-    bool ParseFloat(const char* str, float* val);
-    bool ParseFloat(const wchar_t* str, float* val);
-
-    time_t filetime_to_timet(const FILETIME& ft);
-    size_t TimeToString(uint32_t utc_timestamp, std::string& out);
-    size_t TimeToString(time_t utc_timestamp, std::string& out);
-    size_t TimeToString(FILETIME utc_timestamp, std::string& out);
 
     template <map_type T>
     void MapToIni(ToolboxIni* ini, const char* section, const char* name, const T& map)
@@ -146,6 +96,7 @@ namespace GuiUtils {
         bool decoded = false;
         bool sanitised = false;
         virtual void sanitise();
+        virtual void decode();
         GW::Constants::Language language_id = static_cast<GW::Constants::Language>(0xff);
         static void OnStringDecoded(void* param, const wchar_t* decoded);
 
@@ -161,6 +112,7 @@ namespace GuiUtils {
         EncString* reset(const wchar_t* _enc_string = nullptr, bool sanitise = true);
         std::wstring& wstring();
         std::string& string();
+
 
         [[nodiscard]] const std::wstring& encoded() const
         {
@@ -182,4 +134,7 @@ namespace GuiUtils {
         EncString& operator=(const EncString& temp_obj) = delete;
         virtual ~EncString() = default;
     };
+
+    // Create an ImGui representation of the skill bar
+    void DrawSkillbar(const char* build_code);
 };

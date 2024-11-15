@@ -31,7 +31,7 @@ GWToolbox++ (or just *toolbox*), is a collection of several tools and enhancemen
 		<tr>
 			<td><a href="info">Info</a></td>
 			<td><a href="widgets#distance">Distance Monitor</a></td>
-			<td><a href="filter">Chat Filter</a></td>
+			<td><a href="chatfilter">Chat Filter</a></td>
 		</tr>
 		<tr>
 			<td><a href="materials">Materials Buyer</a></td>
@@ -59,16 +59,54 @@ GWToolbox++ (or just *toolbox*), is a collection of several tools and enhancemen
 			<td><a href="settings#game_settings">URLs in equipment templates</a></td>
 		</tr>
 		<tr>
-			<td>Hero Builds</td>
+			<td><a href="herobuilds">Hero Builds</a></td>
+                        <td><a href="misc_widgets">Miscellaneous Widgets</a></td>
+			<td><a href="integrations">Integrations</a></td>
+		</tr>
+		<tr>
+			<td><a href="trade">Trade</a></td>
+			<td><a href="items">Items</a></td>
+			<td><a href="input_modules">Input</a></td>
+		</tr>
+		<tr>
+			<td><a href="hallofmonuments">Hall of Monuments</a></td>
+			<td><a href="quest">Quest Features</a></td>
+			<td><a href="plugins">Plugins</a></td>
+		</tr>
+		<tr>
+			<td><a href="completion">Completion</a></td>
+			<td><a href="party_window">Party</a></td>
+            <td></td>
+		</tr>
+		<tr>
+			<td><a href="armory_window">Armory</a></td>
+			<td><a href="target_widgets">Target</a></td>
+            <td></td>
+		</tr>
+		<tr>
+			<td><a href="duping_window">Duping</a></td>
+			<td><a href="enemy_window">Enemy</a></td>
+            <td></td>
+		</tr>
+		<tr>
             <td></td>
             <td></td>
 		</tr>
 		<tr>
-			<td><a href="trade">Trade</a></td>
+			<td><a href="main_window">Main Window</a></td>
             <td></td>
             <td></td>
 		</tr>
 	</table>
+</div>
+
+<div style="float: right; width: 15%; margin-left: 5%;">
+	<img src="https://user-images.githubusercontent.com/11432831/28233445-c7762ff4-68ab-11e7-9388-9437c8987a61.PNG" style="float: right;" />
+</div>
+
+<div style="clear: both;">
+	<h2>Main Window</h2>
+	<p>The Main Window serves as a central hub for quickly toggling various windows and widgets in GWToolbox++. It provides easy access to the tools you use most frequently, allowing you to customize your interface on the fly.</p>
 </div>
 
 <div style="float: right; width: 15%; margin-left: 5%;">

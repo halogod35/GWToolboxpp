@@ -12,6 +12,7 @@
 #include "MouseFix.h"
 
 #include <hidusage.h>
+#include <GWCA/Managers/UIMgr.h>
 
 namespace {
     using OnProcessInput_pt = bool(__cdecl*)(uint32_t* wParam, uint32_t* lParam);
@@ -138,10 +139,7 @@ namespace {
             SetCursorPosCenter_Func = reinterpret_cast<SetCursorPosCenter_pt>(GW::Scanner::FunctionFromNearCall(address));
 
             GW::Hook::CreateHook((void**)&ProcessInput_Func, OnProcessInput, reinterpret_cast<void**>(&ProcessInput_Ret));
-            GW::Hook::EnableHooks(ProcessInput_Func);
             GW::Hook::CreateHook((void**)&SetCursorPosCenter_Func, OnSetCursorPosCenter, reinterpret_cast<void**>(&SetCursorPosCenter_Ret));
-            GW::Hook::EnableHooks(SetCursorPosCenter_Func);
-
         }
 
         GWCA_INFO("[SCAN] ProcessInput_Func = %p", ProcessInput_Func);
@@ -155,9 +153,16 @@ namespace {
     }
 
     void CursorFixEnable(const bool enable)
-    {
-        CursorFixInitialise();
-        enable_cursor_fix = enable;
+    {  
+        if (!enable) {
+            GW::HookBase::DisableHooks(ProcessInput_Func);
+            GW::HookBase::DisableHooks(SetCursorPosCenter_Func);
+        }
+        else {
+            CursorFixInitialise();
+            if(ProcessInput_Func) GW::HookBase::EnableHooks(ProcessInput_Func);
+            if(SetCursorPosCenter_Func) GW::HookBase::EnableHooks(SetCursorPosCenter_Func);
+        }
     }
 
 
@@ -315,8 +320,8 @@ namespace {
             // Force redraw
             const auto user_data = (GWWindowUserData*)GetWindowLongA(GW::MemoryMgr::GetGWWindowHandle(), -0x15);
             current_cursor = nullptr;
-            if (user_data) {
-                OnChangeCursorIcon(user_data);
+            if (user_data && ChangeCursorIcon_Func) {
+                ChangeCursorIcon_Func(user_data);
             }
         });
     }
@@ -326,17 +331,45 @@ namespace {
         cursor_size = new_size;
         RedrawCursorIcon();
     }
+
+    GW::HookEntry UIMessage_HookEntry;
+
+    void OnUIMessage(GW::HookStatus*, GW::UI::UIMessage message_id, void*, void*) {
+        switch (message_id) {
+        case GW::UI::UIMessage::kLogout:
+            CursorFixEnable(false);
+            break;
+        case GW::UI::UIMessage::kMapLoaded:
+            CursorFixEnable(enable_cursor_fix);
+            break;
+        }
+    }
+
 } // namespace
 
 void MouseFix::Initialize()
 {
     ToolboxModule::Initialize();
 
-    const uintptr_t address = GW::Scanner::Find("\x8b\x41\x08\x89\x82\x50\x0c\x00\x00", "xxxxxxxxx", 0x9);
-    ChangeCursorIcon_Func = (ChangeCursorIcon_pt)GW::Scanner::FunctionFromNearCall(address);
-    if (ChangeCursorIcon_Func) {
+    auto address = GW::Scanner::Find("\xf7\xc3\x80\x20\x00\x00\x74\x09\x56", "xxxxxxxxx", 0x9);
+    address = GW::Scanner::FunctionFromNearCall(address);
+    if (GW::Scanner::IsValidPtr(address,GW::Scanner::TEXT)) {
+        ChangeCursorIcon_Func = (ChangeCursorIcon_pt)address;
         GW::HookBase::CreateHook((void**)&ChangeCursorIcon_Func, OnChangeCursorIcon, (void**)&ChangeCursorIcon_Ret);
         GW::HookBase::EnableHooks(ChangeCursorIcon_Func);
+    }
+
+#if _DEBUG
+    ASSERT(ChangeCursorIcon_Func);
+#endif
+
+    const GW::UI::UIMessage ui_messages[] = {
+        GW::UI::UIMessage::kLogout,
+        GW::UI::UIMessage::kMapLoaded
+    };
+
+    for (const auto ui_message : ui_messages) {
+        GW::UI::RegisterUIMessageCallback(&UIMessage_HookEntry, ui_message, OnUIMessage);
     }
 }
 
@@ -356,12 +389,9 @@ void MouseFix::SaveSettings(ToolboxIni* ini)
 void MouseFix::Terminate()
 {
     ToolboxModule::Terminate();
-    if (initialized) {
-        CursorFixEnable(false);
-    }
+    CursorFixEnable(false);
+    GW::UI::RemoveUIMessageCallback(&UIMessage_HookEntry);
     GW::HookBase::RemoveHook(ChangeCursorIcon_Func);
-    GW::HookBase::RemoveHook(ProcessInput_Func);
-    GW::HookBase::RemoveHook(SetCursorPosCenter_Func);
 
     gw_mouse_move = nullptr;
 

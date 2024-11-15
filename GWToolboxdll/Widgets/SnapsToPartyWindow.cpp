@@ -21,15 +21,23 @@ namespace {
     bool GetFramePosition(const GW::UI::Frame* frame, const GW::UI::Frame* relative_to, ImVec2* top_left, ImVec2* bottom_right) {
         if (!(frame && relative_to && frame->IsVisible()))
             return false;
+        if (!GImGui)
+            return false;
+        // Imgui viewport may not be limited to the game area.
+        const auto imgui_viewport = ImGui::GetMainViewport();
         if (top_left) {
             *top_left = frame->position.GetTopLeftOnScreen(relative_to);
             top_left->x = std::round(top_left->x);
             top_left->y = std::round(top_left->y);
+            top_left->x += imgui_viewport->Pos.x;
+            top_left->y += imgui_viewport->Pos.y;
         }
         if (bottom_right) {
             *bottom_right = frame->position.GetBottomRightOnScreen(relative_to);
             bottom_right->x = std::round(bottom_right->x);
             bottom_right->y = std::round(bottom_right->y);
+            bottom_right->x += imgui_viewport->Pos.x;
+            bottom_right->y += imgui_viewport->Pos.y;
         }
         return true;
     }
@@ -47,6 +55,10 @@ namespace {
         }
         OnPartyWindowHealthBars_UICallback_Ret(message, wParam, lParam);
         GW::Hook::LeaveHook();
+    }
+    GW::HookEntry OnUIMessage_HookEntry;
+    void OnUIMessage(GW::HookStatus*, GW::UI::UIMessage, void*, void*) {
+        party_window_health_bars = nullptr;
     }
 }
 
@@ -67,12 +79,12 @@ SnapsToPartyWindow::PartyFramePosition* SnapsToPartyWindow::GetAgentHealthBarPos
 
 bool SnapsToPartyWindow::FetchPartyInfo()
 {
+    party_indeces_by_agent_id.clear();
+    party_agent_ids_by_index.clear();
     const GW::PartyInfo* info = GW::PartyMgr::GetPartyInfo();
     if (!info) {
         return false;
     }
-    party_indeces_by_agent_id.clear();
-    party_agent_ids_by_index.clear();
 
     auto append_agent = [&](uint32_t agent_id) {
         if (party_indeces_by_agent_id.contains(agent_id))
@@ -120,7 +132,7 @@ void SnapsToPartyWindow::Initialize()
 {
     ToolboxWidget::Initialize();
     is_movable = is_resizable = false;
-    // TODO: Attach hooks to trigger recalc of positions when party frame is updated
+    GW::UI::RegisterUIMessageCallback(&OnUIMessage_HookEntry, GW::UI::UIMessage::kPreferenceValueChanged, OnUIMessage, 0x8000);
 }
 
 void SnapsToPartyWindow::Terminate()
@@ -128,8 +140,9 @@ void SnapsToPartyWindow::Terminate()
     ToolboxWidget::Terminate();
     if (party_window_health_bars && party_window_health_bars->frame_callbacks[0] == OnPartyWindowHealthBars_UICallback) {
         party_window_health_bars->frame_callbacks[0] = OnPartyWindowHealthBars_UICallback_Ret;
+        party_window_health_bars = nullptr;
     }
-    // TODO: Detach hooks to trigger recalc of positions when party frame is updated
+    // NB: Don't remove the ui callback! Other modules that extend this class will use it. Toolbox will remove all hooks at the end
 }
 
 ImGuiWindowFlags SnapsToPartyWindow::GetWinFlags(ImGuiWindowFlags flags, const bool noinput_if_frozen) const

@@ -22,6 +22,7 @@
 #include <Modules/ObserverModule.h>
 
 #include <Logger.h>
+#include <Utils/TextUtils.h>
 
 namespace {
 
@@ -1971,7 +1972,7 @@ const std::string ObserverModule::ObservableSkill::Name()
     if (_name.length() > 0) {
         return _name;
     }
-    std::string name = GuiUtils::WStringToString(DecName());
+    std::string name = TextUtils::WStringToString(DecName());
     // not ready to cache
     if (name.length() == 0) {
         return name;
@@ -1986,7 +1987,7 @@ const std::string ObserverModule::ObservableSkill::Name()
 std::string ObserverModule::ObservableSkill::DebugName()
 {
     using namespace std::string_literals;
-    return "("s + std::to_string(static_cast<uint32_t>(skill_id)) + "s \"" + GuiUtils::WStringToString(DecName()) + "\"";
+    return "("s + std::to_string(static_cast<uint32_t>(skill_id)) + "s \"" + TextUtils::WStringToString(DecName()) + "\"";
 }
 
 
@@ -1995,8 +1996,8 @@ ObserverModule::ObservableGuild::ObservableGuild(ObserverModule& parent, const G
     : parent(parent)
     , guild_id(guild.index)
     , key(guild.key)
-    , name(GuiUtils::WStringToString(guild.name))
-    , tag(GuiUtils::WStringToString(guild.tag))
+    , name(TextUtils::WStringToString(guild.name))
+    , tag(TextUtils::WStringToString(guild.tag))
     , wrapped_tag("[" + tag + "]")
     , rank(guild.rank)
     , rating(guild.rating)
@@ -2091,7 +2092,7 @@ std::string ObserverModule::ObservableAgent::SanitizedName()
         return "";
     }
     // can now be cached
-    _sanitized_name = GuiUtils::WStringToString(sanitized_name_w);
+    _sanitized_name = TextUtils::WStringToString(sanitized_name_w);
     return _sanitized_name;
 }
 
@@ -2109,7 +2110,7 @@ std::wstring ObserverModule::ObservableAgent::SanitizedNameW()
         return L"";
     }
     // can now be cached
-    _sanitized_name_w = GuiUtils::SanitizePlayerName(raw_name_w);
+    _sanitized_name_w = TextUtils::SanitizePlayerName(raw_name_w);
     return _sanitized_name_w;
 }
 
@@ -2127,7 +2128,7 @@ std::string ObserverModule::ObservableAgent::RawName()
         return "";
     }
     // can now be cached
-    _raw_name = GuiUtils::WStringToString(raw_name_w);
+    _raw_name = TextUtils::WStringToString(raw_name_w);
     return _raw_name;
 }
 
@@ -2175,7 +2176,7 @@ std::string ObserverModule::ObservableMap::Name()
     if (name.length() > 0) {
         return name;
     }
-    name = GuiUtils::WStringToString(name_w);
+    name = TextUtils::WStringToString(name_w);
     return name;
 }
 
@@ -2185,6 +2186,6 @@ std::string ObserverModule::ObservableMap::Description()
     if (description.length() > 0) {
         return description;
     }
-    description = GuiUtils::WStringToString(description_w);
+    description = TextUtils::WStringToString(description_w);
     return description;
 }

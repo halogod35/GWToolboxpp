@@ -18,7 +18,6 @@
 #include <Modules/TeamspeakModule.h>
 #include <Modules/Teamspeak5Module.h>
 #include <Modules/ObserverModule.h>
-#include <Modules/ChatLog.h>
 #include <Modules/HintsModule.h>
 #include <Modules/PluginModule.h>
 #include <Modules/QuestModule.h>
@@ -31,6 +30,10 @@
 #include <Modules/GuildWarsSettingsModule.h>
 #include <Modules/PriceCheckerModule.h>
 #include <Modules/SalvageInfoModule.h>
+#include <Modules/ResignLogModule.h>
+#include <Modules/PartyBroadcastModule.h>
+#include <Modules/CodeOptimiserModule.h>
+#include <Modules/VendorFix.h>
 
 #include <Windows/PconsWindow.h>
 #include <Windows/HotkeysWindow.h>
@@ -55,15 +58,14 @@
 #include <Windows/RerollWindow.h>
 #include <Windows/ArmoryWindow.h>
 #include <Windows/EnemyWindow.h>
-
+#include <Windows/Pathfinding/PathfindingWindow.h>
 #ifdef _DEBUG
 #include <Windows/PacketLoggerWindow.h>
 #include <Windows/DoorMonitorWindow.h>
 #include <Windows/StringDecoderWindow.h>
 #include <Windows/SkillListingWindow.h>
-#include <Windows/TargetInfoWindow.h>
-#include <Windows/PathfindingWindow.h>
 #endif
+#include <Windows/TargetInfoWindow.h>
 
 #include <Widgets/TimerWidget.h>
 #include <Widgets/HealthWidget.h>
@@ -80,6 +82,8 @@
 #include <Widgets/EffectsMonitorWidget.h>
 #include <Widgets/LatencyWidget.h>
 #include <Widgets/ActiveQuestWidget.h>
+#include <Widgets/MissionMapWidget.h>
+#include <Widgets/InventoryOverlayWidget.h>
 #include "ToolboxSettings.h"
 
 
@@ -137,14 +141,16 @@ namespace {
         TeamspeakModule::Instance(),
         Teamspeak5Module::Instance(),
         ObserverModule::Instance(),
-        ChatLog::Instance(),
         HintsModule::Instance(),
         MouseFix::Instance(),
         KeyboardLanguageFix::Instance(),
         GuildWarsSettingsModule::Instance(),
-        //QuestModule::Instance(),
         PriceCheckerModule::Instance(),
-        SalvageInfoModule::Instance()
+        SalvageInfoModule::Instance(),
+        ResignLogModule::Instance(),
+        QuestModule::Instance(),
+        PartyBroadcast::Instance(),
+        CodeOptimiserModule::Instance()
     };
 
     std::vector<WidgetToggle> optional_widgets = {
@@ -162,7 +168,11 @@ namespace {
         EffectsMonitorWidget::Instance(),
         LatencyWidget::Instance(),
         SkillMonitorWidget::Instance(),
-        ActiveQuestWidget::Instance()
+#if _DEBUG
+        InventoryOverlayWidget::Instance(),
+#endif
+        ActiveQuestWidget::Instance(),
+
     };
 
     std::vector<WindowToggle> optional_windows = {
@@ -183,15 +193,14 @@ namespace {
         ObserverTargetWindow::Instance(),
         ObserverPartyWindow::Instance(),
         ObserverExportWindow::Instance(),
-
         CompletionWindow::Instance(),
         RerollWindow::Instance(),
         PartyStatisticsWindow::Instance(),
         DupingWindow::Instance(),
         ArmoryWindow::Instance(),
-#ifdef _DEBUG
-        EnemyWindow::Instance()
-#endif
+        PathfindingWindow::Instance(),
+        EnemyWindow::Instance(),
+        TargetInfoWindow::Instance()
     };
 
     bool modules_sorted = false;
@@ -220,8 +229,11 @@ void ToolboxSettings::LoadModules(ToolboxIni* ini)
     GWToolbox::ToggleModule(StringDecoderWindow::Instance());
     GWToolbox::ToggleModule(DoorMonitorWindow::Instance());
     GWToolbox::ToggleModule(SkillListingWindow::Instance());
-    GWToolbox::ToggleModule(TargetInfoWindow::Instance());
+    GWToolbox::ToggleModule(MissionMapWidget::Instance());
 #endif
+
+    GWToolbox::ToggleModule(VendorFix::Instance());
+
     for (const auto& m : optional_modules) {
         GWToolbox::ToggleModule(*m.toolbox_module, m.enabled);
     }
@@ -332,8 +344,11 @@ void ToolboxSettings::DrawSettingsInternal()
 
 void ToolboxSettings::DrawFreezeSetting()
 {
+    ImGui::StartSpacedElements(300.f);
+    ImGui::NextSpacedElement();
     ImGui::Checkbox("Unlock Move All", &move_all);
     ImGui::ShowHelp("Will allow movement and resize of all widgets and windows");
+    ImGui::NextSpacedElement();
     ImGui::Checkbox("Clamp growing windows to screen bounds", &clamp_windows_to_screen);
 }
 
@@ -344,6 +359,7 @@ void ToolboxSettings::LoadSettings(ToolboxIni* ini)
 
     move_all = false;
     LOAD_BOOL(clamp_windows_to_screen);
+    LOAD_BOOL(send_anonymous_gameplay_info);
 
     for (auto& m : optional_modules) {
         m.enabled = ini->GetBoolValue(modules_ini_section, m.name, m.enabled);
@@ -364,6 +380,7 @@ void ToolboxSettings::SaveSettings(ToolboxIni* ini)
     }
 
     SAVE_BOOL(clamp_windows_to_screen);
+    SAVE_BOOL(send_anonymous_gameplay_info);
 
     for (const auto& m : optional_modules) {
         ini->SetBoolValue(modules_ini_section, m.name, m.enabled);

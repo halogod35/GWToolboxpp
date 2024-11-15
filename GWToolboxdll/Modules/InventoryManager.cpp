@@ -44,6 +44,8 @@ namespace {
     ImVec4 ItemGold = ImColor(255, 204, 86).Value;
 
     bool trade_whole_stacks = false;
+    bool move_to_trade_on_double_click = true;
+    bool move_to_trade_on_alt_click = false;
 
     const char* bag_names[5] = {
         "None",
@@ -461,6 +463,21 @@ namespace {
         }
         pending_moves.clear();
     }
+    void store_all_nicholas_items() {
+        const std::vector<InventoryManager::Item*> items = filter_items(GW::Constants::Bag::Backpack, GW::Constants::Bag::Bag_2, [](const InventoryManager::Item* item) {
+            return item && DailyQuests::GetNicholasItemInfo(item->name_enc);
+            });
+        for (const auto& item : items) {
+            move_item_to_storage(item);
+        }
+        pending_moves.clear();
+    }
+
+    void consume_all(InventoryManager::Item* like_item) {
+        for (uint16_t i = 0; i < like_item->quantity; i++) {
+            GW::Items::UseItem(like_item);
+        }
+    }
 
 
     // Move a whole stack into/out of storage
@@ -507,71 +524,7 @@ namespace {
     AddItemRowToWindow_pt AddItemRowToWindow_Func = nullptr;
     AddItemRowToWindow_pt RetAddItemRowToWindow = nullptr;
 
-    // x, y, z, w; Top, right, bottom, left
-    struct Rect {
-        float top, right, bottom, left;
-
-        bool contains(const GW::Vec2f& pos) const
-        {
-            return pos.x > left
-                   && pos.x < right
-                   && pos.y > top
-                   && pos.y < bottom;
-        }
-
-        Rect() { top = right = bottom = left = 0.0f; }
-
-        Rect(const float _x, const float _y, const float _z, const float _w)
-        {
-            top = _x;
-            right = _y;
-            bottom = _z;
-            left = _w;
-        }
-    };
-
-    Rect& operator*=(Rect& lhs, const float rhs)
-    {
-        lhs.top *= rhs;
-        lhs.bottom *= rhs;
-        lhs.left *= rhs;
-        lhs.right *= rhs;
-        return lhs;
-    }
-
-    Rect operator*(const float lhs, Rect rhs)
-    {
-        rhs *= lhs;
-        return rhs;
-    }
-
-
-    const Rect GetGWWindowPadding()
-    {
-        Rect gw_window_padding = {33.f, 14.f, 14.f, 18.f};
-        gw_window_padding *= GuiUtils::GetGWScaleMultiplier();
-        return gw_window_padding;
-    }
-
-    // Size of a single inv slot on-screen (includes 1px right padding, 2px bottom padding)
-    const GW::Vec2f GetInventorySlotSize()
-    {
-        GW::Vec2f inventory_slot_size = {41.f, 50.f};
-        inventory_slot_size *= GuiUtils::GetGWScaleMultiplier();
-        return inventory_slot_size;
-    }
-
-    // Width of scrollbar on gw windows.
-    constexpr float gw_scrollbar_width = 20.f;
     uint32_t pending_item_move_for_trade = 0;
-
-    bool GetMousePosition(GW::Vec2f& pos)
-    {
-        const ImVec2 imgui_pos = ImGui::GetIO().MousePos;
-        pos.x = static_cast<float>(imgui_pos.x);
-        pos.y = static_cast<float>(imgui_pos.y);
-        return true;
-    }
 
     bool IsTradeWindowOpen()
     {
@@ -597,18 +550,21 @@ namespace {
 
     void prompt_split_stack(const GW::Item* item)
     {
-        PreMoveItemStruct details;
-        details.item_id = item->item_id;
-        // Doesn't matter where the prompt is asking to move to, as long as its not the same slot; we're going to override later.
-        details.bag_id = std::to_underlying(GW::Constants::Bag::None); // empty_bag_id;
-        details.slot = 0;                                                     // empty_slot;
-        if (item->bag->index == details.bag_id && item->slot == details.slot) {
-            details.slot++;
-        }
-        details.prompt_split_stack = true;
-        SendUIMessage(GW::UI::UIMessage::kMoveItem, &details);
-        //OnPreMoveItem(7, &details);
-        InventoryManager::Instance().stack_prompt_item_id = item->item_id;
+        GW::GameThread::Enqueue([item] {
+            PreMoveItemStruct details{
+                .item_id = item->item_id,
+                .bag_id = std::to_underlying(GW::Constants::Bag::None),
+                .slot = 0,
+                .prompt_split_stack = true
+            };
+            // Doesn't matter where the prompt is asking to move to, as long as its not the same slot; we're going to override later.
+            if (item->bag->index == details.bag_id && item->slot == details.slot) {
+                details.slot++;
+            }
+            SendUIMessage(GW::UI::UIMessage::kMoveItem, &details);
+            //OnPreMoveItem(7, &details);
+            InventoryManager::Instance().stack_prompt_item_id = item->item_id;
+        });
     }
 
     uint32_t right_clicked_item = 0;
@@ -841,7 +797,7 @@ namespace {
 
         if(!(message->message_id == GW::UI::UIMessage::kInitFrame
             && trade_whole_stacks
-            && !ImGui::IsKeyDown(ImGuiKey_ModShift)))
+            && !ImGui::IsKeyDown(ImGuiMod_Shift)))
             return GW::Hook::LeaveHook();
         const auto frame = GW::UI::GetFrameById(message->frame_id);
         const auto max_btn = GW::UI::GetChildFrame(frame,4);
@@ -882,7 +838,7 @@ void InventoryManager::OnUIMessage(GW::HookStatus* status, const GW::UI::UIMessa
         // About to request a quote for an item
         case GW::UI::UIMessage::kSendMerchantRequestQuote: {
             requesting_quote_type = 0;
-            if (instance.pending_transaction.in_progress() || !ImGui::IsKeyDown(ImGuiKey_ModCtrl) || MaterialsWindow::Instance().GetIsInProgress()) {
+            if (instance.pending_transaction.in_progress() || !ImGui::IsKeyDown(ImGuiMod_Ctrl) || MaterialsWindow::Instance().GetIsInProgress()) {
                 return;
             }
             requesting_quote_type = *static_cast<uint32_t*>(wparam);
@@ -1059,6 +1015,13 @@ bool InventoryManager::WndProc(const UINT message, const WPARAM wParam, const LP
     return false;
 }
 
+uint16_t InventoryManager::CountItemsByName(const wchar_t* name_enc)
+{
+    return count_items(GW::Constants::Bag::Backpack, GW::Constants::Bag::Storage_14, [name_enc](InventoryManager::Item* item) {
+        return item && item->name_enc && wcscmp(item->name_enc, name_enc) == 0;
+        });
+}
+
 void InventoryManager::SaveSettings(ToolboxIni* ini)
 {
     ToolboxUIElement::SaveSettings(ini);
@@ -1072,6 +1035,8 @@ void InventoryManager::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(change_secondary_for_tome);
     SAVE_BOOL(right_click_context_menu_in_outpost);
     SAVE_BOOL(right_click_context_menu_in_explorable);
+    SAVE_BOOL(move_to_trade_on_double_click);
+    SAVE_BOOL(move_to_trade_on_alt_click);
 
     ini->SetBoolValue(Name(), VAR_NAME(salvage_from_backpack), bags_to_salvage_from[GW::Constants::Bag::Backpack]);
     ini->SetBoolValue(Name(), VAR_NAME(salvage_from_belt_pouch), bags_to_salvage_from[GW::Constants::Bag::Belt_Pouch]);
@@ -1094,6 +1059,8 @@ void InventoryManager::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(change_secondary_for_tome);
     LOAD_BOOL(right_click_context_menu_in_outpost);
     LOAD_BOOL(right_click_context_menu_in_explorable);
+    LOAD_BOOL(move_to_trade_on_double_click);
+    LOAD_BOOL(move_to_trade_on_alt_click);
 
     bags_to_salvage_from[GW::Constants::Bag::Backpack] = ini->GetBoolValue(Name(), VAR_NAME(salvage_from_backpack), bags_to_salvage_from[GW::Constants::Bag::Backpack]);
     bags_to_salvage_from[GW::Constants::Bag::Belt_Pouch] = ini->GetBoolValue(Name(), VAR_NAME(salvage_from_belt_pouch), bags_to_salvage_from[GW::Constants::Bag::Belt_Pouch]);
@@ -1330,7 +1297,7 @@ void InventoryManager::ContinueTransaction()
             }
             // Check if we need any more of this item; send quote if yes, complete if no.
             if (pending_transaction_amount <= 0) {
-                Log::Info("Transaction complete");
+                Log::Flash("Transaction complete");
                 CancelTransaction();
                 return;
             }
@@ -1502,10 +1469,9 @@ bool get_next_bag_slot(const InventoryManager::Item* item, GW::Constants::Bag* b
     if (slot >= bag->items.size()) {
         bag_id = GW::Constants::Bag::Max;
         slot = 0;
-        for (auto it_bag_id = ++bag->bag_id(); it_bag_id < GW::Constants::Bag::Max; it_bag_id++) {
-            const auto it_bag = GW::Items::GetBag(it_bag_id);
-            if (it_bag) {
-                bag_id = it_bag_id;
+        for (auto it = static_cast<GW::Constants::Bag>(std::to_underlying(bag->bag_id()) + 1); it < GW::Constants::Bag::Max; ++it) {
+            if (GW::Items::GetBag(it)) {
+                bag_id = it;
                 break;
             }
         }
@@ -1812,6 +1778,15 @@ void InventoryManager::DrawSettingsInternal()
     ImGui::Checkbox("Hide weapon sets and customized items from merchant window", &hide_weapon_sets_and_customized_items);
     ImGui::Checkbox("Move whole stacks by default", &trade_whole_stacks);
     ImGui::ShowHelp("Shift drag to prompt for amount, drag without shift to move the whole stack without any item quantity prompts");
+    ImGui::TextUnformatted("Move items to trade on:");
+    ImGui::ShowHelp("When trading with another player, you normally have to drag an item from inventory to the trade window. Enable an option below to make it easier.");
+    ImGui::Indent();
+    if (ImGui::Checkbox("Double Click", &move_to_trade_on_double_click) && move_to_trade_on_alt_click)
+        move_to_trade_on_alt_click = false;
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Alt+Click", &move_to_trade_on_alt_click) && move_to_trade_on_alt_click)
+        move_to_trade_on_double_click = false;
+    ImGui::Unindent();
     ImGui::Checkbox("Show 'Guild Wars Wiki' link on item context menu", &wiki_link_on_context_menu);
     ImGui::Checkbox("Prompt to change secondary profession when using a tome", &change_secondary_for_tome);
     ImGui::Text("Right click an item to open context menu in:");
@@ -1848,7 +1823,7 @@ void InventoryManager::DrawSettingsInternal()
         const bool clicked = ImGui::Button(" X ");
         ImGui::PopID();
         if (clicked) {
-            Log::Info("Removed Item %s with ID (%d)", item_name.c_str(), item_id);
+            Log::Flash("Removed Item %s with ID (%d)", item_name.c_str(), item_id);
             hide_from_merchant_items.erase(item_id);
             break;
         }
@@ -1866,7 +1841,7 @@ void InventoryManager::DrawSettingsInternal()
         const auto new_id = static_cast<uint16_t>(new_item_id);
         if (!hide_from_merchant_items.contains(new_id)) {
             hide_from_merchant_items[new_id] = std::string(buf);
-            Log::Info("Added Item %s with ID (%d)", buf, new_id);
+            Log::Flash("Added Item %s with ID (%d)", buf, new_id);
             std::ranges::fill(buf, '\0');
             new_item_id = 0;
         }
@@ -1949,58 +1924,6 @@ void InventoryManager::Draw(IDirect3DDevice9*)
     static bool show_inventory_context_menu = false;
     DrawItemContextMenu(show_item_context_menu);
     show_item_context_menu = false;
-
-    /*
-    *   Cog icon on inventory bags window
-    */
-#if 0
-    bool show_options_on_inventory = false;
-    if (show_options_on_inventory && inventory_bags_window_position && inventory_bags_window_position->visible()) {
-        float uiscale_multiply = GuiUtils::GetGWScaleMultiplier();
-        // NB: Use case to define GW::Vec4f ?
-        GW::Vec2f x = inventory_bags_window_position->xAxis(uiscale_multiply);
-        GW::Vec2f y = inventory_bags_window_position->yAxis(uiscale_multiply);
-        // Clamp
-        ImVec4 rect(x.x, y.x, x.y, y.y);
-        ImVec4 viewport(0, 0, (float)GW::Render::GetViewportWidth(), (float)GW::Render::GetViewportHeight());
-        // GW Clamps windows to viewport; we need to do the same.
-        GuiUtils::ClampRect(rect, viewport);
-        // Left placement
-        GW::Vec2f internal_offset(
-            (rect.z - rect.x) - 48.f * uiscale_multiply ,
-            0.f
-        );
-        ImVec2 calculated_pos = ImVec2(rect.x + internal_offset.x, rect.y + internal_offset.y);
-        ImGui::SetNextWindowPos(calculated_pos);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(10.0f, 10.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ButtonTextAlign, ImVec2(0, 0));
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_Button, ImColor(0, 0, 0, 0).Value);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImColor(0, 0, 0, 0).Value);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImColor(0, 0, 0, 0).Value);
-        const char* context_menu_id = "Inventory Context Menu###inv_context";
-        if (ImGui::Begin("Inventory bags context", &visible, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize)) {
-            const char* btn_id = u8"\uf013###inv_bags_context_btn";
-            show_inventory_context_menu = ImGui::Button(btn_id);
-        }
-        ImGui::End();
-        ImGui::PopStyleColor(4);
-        ImGui::PopStyleVar(4);
-        if (show_inventory_context_menu)
-            ImGui::OpenPopup(context_menu_id);
-        if (ImGui::BeginPopup(context_menu_id)) {
-            if (GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost) {
-                if (ImGui::Button("Store Materials")) {
-                    Log::Info("TODO: Store materials");
-                }
-            }
-            ImGui::EndPopup();
-        }
-
-    }
-#endif
 
     if (show_transact_quantity_popup) {
         ImGui::OpenPopup("Transaction quantity");
@@ -2142,6 +2065,7 @@ void InventoryManager::Draw(IDirect3DDevice9*)
                     ImGui::SetTooltip("%s", pi->desc.string().c_str());
                 }
                 ImGui::SameLine(longest_item_name_length + wiki_btn_width);
+                pi->wiki_name.wstring();
                 if (ImGui::Button("Wiki", ImVec2(wiki_btn_width, 0))) {
                     GuiUtils::SearchWiki(pi->wiki_name.wstring());
                 }
@@ -2247,6 +2171,13 @@ bool InventoryManager::DrawItemContextMenu(const bool open)
                     goto end_popup;
                 }
             }
+            if (DailyQuests::GetNicholasItemInfo(context_item_actual->name_enc)) {
+                if (ImGui::Button("Store All Nicholas Items", size)) {
+                    ImGui::CloseCurrentPopup();
+                    store_all_nicholas_items();
+                    goto end_popup;
+                }
+            }
             snprintf(move_all_label, _countof(move_all_label), "Store All %s", context_item.plural_item_name.string().c_str());
         }
         if(context_item_actual->IsStorageItem()) {
@@ -2337,6 +2268,7 @@ bool InventoryManager::DrawItemContextMenu(const bool open)
             goto end_popup;
         }
     }
+    context_item.wiki_name.wstring();
     if (wiki_link_on_context_menu && ImGui::Button("Guild Wars Wiki", size)) {
         ImGui::CloseCurrentPopup();
         GuiUtils::SearchWiki(context_item.wiki_name.wstring());
@@ -2353,28 +2285,62 @@ void InventoryManager::ItemClickCallback(GW::HookStatus* status, const uint32_t 
     InventoryManager& im = Instance();
     const Item* item = nullptr;
     switch (type) {
-        case 7: // Left click + ctrl
-            if (!ImGui::IsKeyDown(ImGuiKey_ModCtrl)) {
-                return;
-            }
-            break;
-        case 8: // Double click - add to trade window if available
-            if (!IsTradeWindowOpen()) {
-                return;
-            }
-            status->blocked = true;
-            item = static_cast<Item*>(GW::Items::GetItemBySlot(bag, slot + 1));
-            if (!item || !item->CanOfferToTrade()) {
-                return;
-            }
-            if (!item->bag->IsInventoryBag()) {
-                const uint16_t moved = move_to_first_empty_slot(item, GW::Constants::Bag::Backpack, GW::Constants::Bag::Bag_2);
-                if (!moved) {
-                    Log::ErrorW(L"Failed to move item to inventory for trading");
+        case 7: // Left click
+            if (ImGui::IsKeyDown(ImGuiMod_Ctrl) 
+                && GameSettings::GetSettingBool("move_item_on_ctrl_click") 
+                && GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost) {
+                // Ctrl+Click: Move item to inventory/chest
+                if (bag) {
+                    item = static_cast<Item*>(GW::Items::GetItemBySlot(bag, slot + 1));
+                }
+                else {
+                    item = static_cast<Item*>(GW::Items::GetHoveredItem());
+                }
+                if (!item) {
                     return;
                 }
+
+                if (ImGui::IsKeyDown(ImGuiMod_Shift) && item->quantity > 1) {
+                    prompt_split_stack(item);
+                }
+                else {
+                    move_item(item);
+                }
+                return;
             }
-            pending_item_move_for_trade = item->item_id;
+            if (ImGui::IsKeyDown(ImGuiMod_Alt) && move_to_trade_on_alt_click && IsTradeWindowOpen()) {
+                // Alt+Click: Add to trade window if available
+                item = static_cast<Item*>(GW::Items::GetItemBySlot(bag, slot + 1));
+                if (!item || !item->CanOfferToTrade()) {
+                    return;
+                }
+                if (!item->bag->IsInventoryBag()) {
+                    const uint16_t moved = move_to_first_empty_slot(item, GW::Constants::Bag::Backpack, GW::Constants::Bag::Bag_2);
+                    if (!moved) {
+                        Log::ErrorW(L"Failed to move item to inventory for trading");
+                        return;
+                    }
+                }
+                pending_item_move_for_trade = item->item_id;
+            }
+            return;
+        case 8: // Double click
+            if (move_to_trade_on_double_click && IsTradeWindowOpen()) {
+                status->blocked = true;
+                // Alt+Click: Add to trade window if available
+                item = static_cast<Item*>(GW::Items::GetItemBySlot(bag, slot + 1));
+                if (!item || !item->CanOfferToTrade()) {
+                    return;
+                }
+                if (!item->bag->IsInventoryBag()) {
+                    const uint16_t moved = move_to_first_empty_slot(item, GW::Constants::Bag::Backpack, GW::Constants::Bag::Bag_2);
+                    if (!moved) {
+                        Log::ErrorW(L"Failed to move item to inventory for trading");
+                        return;
+                    }
+                }
+                pending_item_move_for_trade = item->item_id;
+            }
             return;
         case 999: // Right click (via GWToolbox)
             if (!Instance().right_click_context_menu_in_explorable && GW::Map::GetInstanceType() == GW::Constants::InstanceType::Explorable) {
@@ -2383,47 +2349,29 @@ void InventoryManager::ItemClickCallback(GW::HookStatus* status, const uint32_t 
             if (!Instance().right_click_context_menu_in_outpost && GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost) {
                 return;
             }
-            break;
+
+            if (bag) {
+                item = static_cast<Item*>(GW::Items::GetItemBySlot(bag, slot + 1));
+            }
+            else {
+                item = static_cast<Item*>(GW::Items::GetHoveredItem());
+            }
+            if (!item) {
+                return;
+            }
+
+            // Context menu applies
+            if (im.context_item.item_id == item->item_id && im.show_item_context_menu) {
+                return; // Double looped.
+            }
+            if (!im.context_item.set(item)) {
+                return;
+            }
+            im.show_item_context_menu = true;
+            status->blocked = true;
+            return;
         default:
             return;
-    }
-
-    if (bag) {
-        item = static_cast<Item*>(GW::Items::GetItemBySlot(bag, slot + 1));
-    }
-    else {
-        item = static_cast<Item*>(GW::Items::GetHoveredItem());
-    }
-
-    if (!item) {
-        return;
-    }
-
-    const bool show_context_menu = item->IsIdentificationKit() || item->IsSalvageKit() || type == 999;
-
-    if (show_context_menu) {
-        // Context menu applies
-        if (im.context_item.item_id == item->item_id && im.show_item_context_menu) {
-            return; // Double looped.
-        }
-        if (!im.context_item.set(item)) {
-            return;
-        }
-        im.show_item_context_menu = true;
-        status->blocked = true;
-        return;
-    }
-    if (type == 7
-        && ImGui::IsKeyDown(ImGuiKey_ModCtrl)
-        && GameSettings::GetSettingBool("move_item_on_ctrl_click")
-        && GW::Map::GetInstanceType() == GW::Constants::InstanceType::Outpost) {
-        // Move item on ctrl click
-        if (ImGui::IsKeyDown(ImGuiKey_ModShift) && item->quantity > 1) {
-            prompt_split_stack(item);
-        }
-        else {
-            move_item(item);
-        }
     }
 }
 
@@ -2632,10 +2580,9 @@ bool InventoryManager::PendingItem::set(const Item* item)
     // NB: This doesn't work for inscriptions; gww doesn't have a page per inscription.
     wiki_name.reset(ItemDescriptionHandler::GetItemEncNameWithoutMods(item).c_str());
     wiki_name.language(GW::Constants::Language::English);
-    wiki_name.wstring(); // Trigger decode; this isn't done any other time
     const auto plural_item_enc = std::format(L"\xa35\x101\x100\x10a{}\x1", item->name_enc);
     plural_item_name.reset(plural_item_enc.c_str());
-    desc.reset(item->info_string);
+    desc.reset(ItemDescriptionHandler::GetItemDescription(item).c_str());
     return true;
 }
 

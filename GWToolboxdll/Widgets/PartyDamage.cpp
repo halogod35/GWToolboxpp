@@ -16,6 +16,7 @@
 #include <Modules/Resources.h>
 #include <Modules/ToolboxSettings.h>
 #include <Widgets/PartyDamage.h>
+#include <Utils/TextUtils.h>
 
 constexpr const wchar_t* INI_FILENAME = L"healthlog.ini";
 constexpr const char* IniSection = "health";
@@ -45,6 +46,7 @@ namespace {
     int recent_max_time = 7000;
     bool hide_in_outpost = false;
     bool print_by_click = false;
+    bool overlay_party_window = false;
 
     // Distance away from the party window on the x axis; used with snap to party window
     int user_offset = 0;
@@ -241,7 +243,7 @@ void CHAT_CMD_FUNC(PartyDamage::CmdDamage)
         WritePartyDamage();
     }
     else {
-        const std::wstring arg1 = GuiUtils::ToLower(argv[1]);
+        const std::wstring arg1 = TextUtils::ToLower(argv[1]);
         if (arg1 == L"print" || arg1 == L"report") {
             WritePartyDamage();
         }
@@ -253,7 +255,7 @@ void CHAT_CMD_FUNC(PartyDamage::CmdDamage)
         }
         else {
             uint32_t idx;
-            if (GuiUtils::ParseUInt(argv[1], &idx)) {
+            if (TextUtils::ParseUInt(argv[1], &idx)) {
                 WriteDamageOf(idx - 1);
             }
         }
@@ -326,6 +328,7 @@ void PartyDamage::Update(const float)
             entry.recent_damage = 0;
         }
     }
+    FetchPartyInfo();
 }
 
 void PartyDamage::Draw(IDirect3DDevice9* )
@@ -341,7 +344,7 @@ void PartyDamage::Draw(IDirect3DDevice9* )
     }
 
     // @Cleanup: Only call when the party window has been moved or updated
-    if (!(FetchPartyInfo() && RecalculatePartyPositions())) {
+    if (party_agent_ids_by_index.empty() || !RecalculatePartyPositions()) {
         return;
     }
     if (damage.size() < party_agent_ids_by_index.size()) {
@@ -366,14 +369,24 @@ void PartyDamage::Draw(IDirect3DDevice9* )
     const Color damage_recent_to = Colors::Sub(color_recent, Colors::ARGB(0, 20, 20, 20));
 
     const auto user_offset_x = abs(static_cast<float>(user_offset));
-    float damage_x = party_health_bars_position.top_left.x - user_offset_x - width;
-    if (damage_x < 0 || user_offset < 0) {
-        // Right placement
-        damage_x = party_health_bars_position.bottom_right.x + user_offset_x;
+    float window_x = .0f;
+    if (overlay_party_window) {
+        window_x = party_health_bars_position.top_left.x + user_offset_x;
+        if (user_offset < 0) {
+            window_x = party_health_bars_position.bottom_right.x - user_offset_x - width;
+        }
+
+    }
+    else {
+        window_x = party_health_bars_position.top_left.x - user_offset_x - width;
+        if (window_x < 0 || user_offset < 0) {
+            // Right placement
+            window_x = party_health_bars_position.bottom_right.x + user_offset_x;
+        }
     }
 
     // Add a window to capture mouse clicks.
-    ImGui::SetNextWindowPos({ damage_x, party_health_bars_position.top_left.y });
+    ImGui::SetNextWindowPos({ window_x, party_health_bars_position.top_left.y });
     ImGui::SetNextWindowSize({ width, party_health_bars_position.bottom_right.y - party_health_bars_position.top_left.y });
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -394,7 +407,7 @@ void PartyDamage::Draw(IDirect3DDevice9* )
             if (!health_bar_pos)
                 continue;
 
-            const ImVec2 damage_top_left = { damage_x, health_bar_pos->top_left.y };
+            const ImVec2 damage_top_left = { window_x, health_bar_pos->top_left.y };
             const ImVec2 damage_bottom_right = { damage_top_left.x + width, health_bar_pos->bottom_right.y };
             draw_list->AddRectFilled(damage_top_left, damage_bottom_right, color_background);
 
@@ -485,6 +498,8 @@ void PartyDamage::LoadSettings(ToolboxIni* ini)
     LOAD_BOOL(hide_in_outpost);
     LOAD_BOOL(print_by_click);
     LOAD_UINT(user_offset);
+    LOAD_BOOL(overlay_party_window);
+
 
     if (inifile == nullptr) {
         inifile = new ToolboxIni(false, false, false);
@@ -494,7 +509,7 @@ void PartyDamage::LoadSettings(ToolboxIni* ini)
     inifile->GetAllKeys(IniSection, keys);
     for (const ToolboxIni::Entry& key : keys) {
         int lkey;
-        if (GuiUtils::ParseInt(key.pItem, &lkey)) {
+        if (TextUtils::ParseInt(key.pItem, &lkey)) {
             if (lkey <= 0) {
                 continue;
             }
@@ -520,6 +535,7 @@ void PartyDamage::SaveSettings(ToolboxIni* ini)
     SAVE_BOOL(hide_in_outpost);
     SAVE_BOOL(print_by_click);
     SAVE_UINT(user_offset);
+    SAVE_BOOL(overlay_party_window);
 
     for (const auto& [player_number, hp] : hp_map) {
         std::string key = std::to_string(player_number);
@@ -531,14 +547,25 @@ void PartyDamage::SaveSettings(ToolboxIni* ini)
 void PartyDamage::DrawSettingsInternal()
 {
     ToolboxWidget::DrawSettingsInternal();
-    ImGui::SameLine();
+    ImGui::StartSpacedElements(292.f);
+    ImGui::NextSpacedElement();
     ImGui::Checkbox("Hide in outpost", &hide_in_outpost);
+    ImGui::NextSpacedElement();
     ImGui::Checkbox("Print Player Damage by Ctrl + Click", &print_by_click);
-
-    ImGui::InputInt("Party window offset", &user_offset);
-    ImGui::ShowHelp("Distance away from the party window");
+    ImGui::NextSpacedElement();
     ImGui::Checkbox("Bars towards the left", &bars_left);
     ImGui::ShowHelp("If unchecked, they will expand to the right");
+
+    ImGui::StartSpacedElements(292.f);
+    ImGui::NextSpacedElement();
+    ImGui::Checkbox("Show on top of health bars", &overlay_party_window);
+    ImGui::ShowHelp("Untick to show this widget to the left (or right) of the party window.\nTick to show this widget over the top of the party health bars inside the party window");
+    ImGui::NextSpacedElement();
+    ImGui::PushItemWidth(120.f);
+    ImGui::DragInt("Party window offset", &user_offset);
+    ImGui::PopItemWidth();
+    ImGui::ShowHelp("Distance away from the party window");
+
     ImGui::DragFloat("Width", &width, 1.0f, 50.0f, 0.0f, "%.0f");
     if (width <= 0) {
         width = 1.0f;
