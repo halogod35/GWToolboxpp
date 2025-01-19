@@ -479,10 +479,9 @@ void UpdateEnabledWidgetVectors(ToolboxModule* m, bool added)
     minimap_enabled = GWToolbox::IsModuleEnabled(&Minimap::Instance());
 }
 
-bool GWToolbox::ShouldDisableToolbox(GW::Constants::MapID map_id)
+bool GWToolbox::ShouldDisableToolbox(GW::Constants::MapID)
 {
-    const auto m = GW::Map::GetMapInfo(map_id);
-    return m && (m->GetIsPvP() || m->GetIsGuildHall());
+    return false;
 }
 
 bool GWToolbox::IsInitialized() { return gwtoolbox_state == GWToolboxState::Initialised; }
